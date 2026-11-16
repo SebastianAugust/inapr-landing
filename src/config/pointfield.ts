@@ -31,15 +31,18 @@ export const ZOOM_DIRECTIONS = [
 export type ZoomDirection = (typeof ZOOM_DIRECTIONS)[number]
 
 export interface PointFieldParams {
-  /** Faktor lerp skalar scroll T per frame 60 fps (0..1). Besar = lebih responsif. */
+  /**
+   * Faktor lerp skalar scroll T per frame 60 fps (0..1). Animasi MENEMPEL ke scroll (scrubbed):
+   * tanpa jam sendiri, T hanya mengikuti posisi scroll dengan smoothing ringan. ~0,28 = hampir
+   * langsung (T sampai di posisi scroll dalam ±0,2 detik).
+   */
   smoothing: number
   /**
-   * Pembatas laju T (anti-skip): satu jeda penuh (T naik 1) TIDAK bisa dilewati lebih cepat dari
-   * ini (detik), seberapa pun cepat scroll-nya. Flick yang melompati jeda tetap memutar zoom in →
-   * tahan → zoom out berurutan, mengejar posisi scroll dengan laju terbatas. Di section laju
-   * boleh RATE_LIMIT.sectionFactor kali lebih cepat. 0 = tanpa pembatas.
+   * Gerbang lembut anti-skip (lihat GATE dan engine.ts). Flick cepat yang melewati satu jeda
+   * seluruhnya dalam GATE.windowMs memicu scroll halus ke tengah jeda itu (fase tahan), satu kali
+   * per lintasan, lalu kontrol kembali penuh ke pengguna. Mati di reduced motion dan saat navigasi.
    */
-  minBreakSeconds: number
+  gateEnabled: boolean
 
   // ---- Titik ----
   /** Jumlah titik per jenis perangkat (lihat pickDevice() di engine.ts). Satu draw call. */
@@ -94,6 +97,12 @@ export interface PointFieldParams {
   /** ZOOM IN + bentuk terbentuk: 0 → phaseFormEnd. TAHAN: phaseFormEnd → phaseHoldEnd. LEPAS + ZOOM OUT: phaseHoldEnd → 1. */
   phaseFormEnd: number
   phaseHoldEnd: number
+  /**
+   * Easing intensitas zoom/bentuk di fase masuk dan lepas (0..1): 0 = smoothstep (pelan di
+   * ujung, cepat di tengah), 1 = linear murni (gerak sebanding scroll). ~0,6 = tengahnya hampir
+   * linear, ujungnya masih halus, jadi terasa mengikuti jari/roda.
+   */
+  zoomEase: number
 
   // ---- Bentuk ----
   /** Tinggi bentuk pada puncak zoom, fraksi tinggi viewport (±0.4–0.5 terbaca solid). */
@@ -187,8 +196,8 @@ export interface PointFieldParams {
 }
 
 export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
-  smoothing: 0.1,
-  minBreakSeconds: 1.6,
+  smoothing: 0.28,
+  gateEnabled: true,
   countDesktop: 20000,
   countLowPower: 11000,
   countMobile: 7500,
@@ -205,12 +214,13 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   wobbleAmplitude: 0.12,
   wobbleSpeed: 0.6,
   cameraFar: 16,
-  cameraNear: 7,
-  zoomReach: 10,
+  cameraNear: 6.5,
+  zoomReach: 11,
   pathCurve: 0.7,
   holdDrift: 0.04,
-  phaseFormEnd: 0.38,
-  phaseHoldEnd: 0.68,
+  phaseFormEnd: 0.42,
+  phaseHoldEnd: 0.55,
+  zoomEase: 0.6,
   shapeSize: 0.45,
   shapeMaxWidth: 0.8,
   shapeSpin: 0.18,
@@ -261,17 +271,26 @@ export const GEOMETRY_KEYS = [
 
 /**
  * Tinggi satu jeda (Break): desktop dalam vh, mobile dalam svh (di bawah breakpoint md Tailwind,
- * 768px; svh stabil saat bar alamat muncul/menyusut). Lebih tinggi dari viewport = jeda tidak
- * bisa terlewat dalam satu layar scroll.
+ * 768px; svh stabil saat bar alamat muncul/menyusut). Tanpa teks; canvas fixed, jadi jeda yang
+ * tinggi terasa "berat": animasi menempel ke scroll sepanjang jeda.
  */
-export const BREAK_HEIGHT = { desktop: 115, mobile: 95 } as const
+export const BREAK_HEIGHT = { desktop: 170, mobile: 140 } as const
 
 /**
- * Pembatas laju T (lihat minBreakSeconds): di section (netral, hanya kamera berputar pelan) T
- * boleh bergerak sectionFactor kali lebih cepat dari di jeda. LAG_JUMP = bila T tertinggal lebih
- * dari ini (elemen) dari scroll, T langsung disamakan (End/Home jauh), bukan mengejar.
+ * Gerbang anti-skip (params.gateEnabled). Terpicu bila dalam windowMs posisi tengah viewport
+ * bergerak MAJU melewati lebih dari minFraction tinggi satu jeda (mis. flick sebelum → sesudah
+ * jeda). Lalu scroll halus (durationMs, easeInOutCubic) ke tengah jeda itu. Satu kali per jeda per
+ * lintasan; cooldownMs antar pemicu; ignoreMs = ekor flick/momentum setelah pemicu yang tidak
+ * dihitung sebagai pengambilalihan; suppressMs = jeda setelah navigasi (klik anchor, Home/End).
  */
-export const RATE_LIMIT = { sectionFactor: 4, lagJump: 4 } as const
+export const GATE = {
+  windowMs: 300,
+  minFraction: 0.8,
+  durationMs: 700,
+  cooldownMs: 1200,
+  ignoreMs: 120,
+  suppressMs: 2500,
+} as const
 
 /** Seed acak geometri: posisi dan penugasan titik bentuk sama di setiap kunjungan. */
 export const GEOMETRY_SEED = 20170101

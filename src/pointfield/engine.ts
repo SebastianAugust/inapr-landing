@@ -7,12 +7,16 @@
  *   intensitas bentuk I. Section selalu netral (I = 0, hanya bintang); di tiap jeda:
  *   ZOOM IN + bentuk terbentuk → TAHAN → LEPAS + ZOOM OUT. I menggerakkan morph titik
  *   bentuk DAN posisi kamera pada jalurnya, jadi keduanya selalu sinkron.
- * - Anti-skip: laju T dibatasi (params.minBreakSeconds): satu jeda penuh tidak bisa dilewati lebih
- *   cepat dari durasi minimum. Flick melewati jeda → T mengejar posisi scroll dengan laju
- *   terbatas, jadi zoom in → tahan → zoom out tetap berurutan lalu berhenti sesuai posisi akhir
- *   (SETTLE tetap berlaku setelah T sampai). Lompatan instan (perubahan scroll > JUMP_ELEMENTS
- *   dalam satu frame: End/Home, tarik scrollbar) atau tertinggal > RATE_LIMIT.lagJump langsung
- *   disamakan; klik anchor jauh tetap lewat mode navigasi (onClick).
+ * - SCRUBBED: animasi menempel ke scroll, tanpa jam sendiri. T hanya mengikuti posisi scroll dengan
+ *   smoothing ringan (params.smoothing), jadi animasi jeda tidak pernah main setelah posisi scroll
+ *   di luar jeda. Di section keadaan selalu netral (intensitas 0). SETTLE hanya menyelesaikan
+ *   intensitas bentuk setengah jadi di jeda yang sama; tidak menggerakkan T.
+ * - Gerbang anti-skip (params.gateEnabled, GATE di config): bila dalam GATE.windowMs posisi tengah
+ *   viewport bergerak bertahap MAJU (lompatan > 1 viewport per frame tidak dihitung) melewati > GATE.minFraction tinggi satu jeda (flick), scroll halus
+ *   programatik ke tengah jeda itu (fase tahan), lalu kontrol penuh kembali ke pengguna. Satu kali
+ *   per jeda per lintasan; dibatalkan input pengguna (roda non-momentum, sentuh, tombol, pointer);
+ *   tidak terpicu saat navigasi (klik anchor, Home/End), reduced motion, jari/pointer sedang
+ *   menekan. Semua listener pasif; scroll tetap native kecuali gerakan otomatis itu.
  * - ARAH ZOOM (kiri/kanan/atas/bawah/sudut) per jeda bukan posisi bentuk di layar, melainkan
  *   ke mana kamera menyimpang: titik fokus C = arah zoom × zoomReach dari pusat field.
  *   Kamera bergerak di kurva Bézier kuadratik dari pose netral (jarak cameraFar, melihat
@@ -62,9 +66,9 @@ import {
   GEOMETRY_KEYS,
   MAX_PIXEL_RATIO,
   MAX_POINT_PX,
+  GATE,
   POINTER,
   POINTFIELD_DEFAULTS,
-  RATE_LIMIT,
   READ_COLOR_TOKENS,
   readStats,
   SAFE_ZONE,
@@ -119,6 +123,8 @@ export interface PointFieldDebug {
   effective: number
   /** Puncak jeda ter-ease (0 = membaca, 1 = puncak). */
   peak: number
+  /** Gerbang anti-skip: sedang bergerak otomatis dan jumlah pemicu sejak engine dibuat. */
+  gate: { active: boolean; fires: number; blocked: string; fired: number[]; samples: number }
   /** Zona aman: aktif/tidak dan rect kolom konten (px layar). */
   safeZone: { on: boolean; left: number; right: number }
 }
@@ -151,10 +157,9 @@ const FRAME_MS = 1000 / 60
 /** Batas dt per frame: setelah tab kembali / jank, waktu dan T tidak melonjak. */
 const MAX_DT_MS = 50
 /**
- * Bila posisi scroll (target) berubah lebih dari ini (dalam jumlah elemen) dalam SATU frame
- * (mis. tombol End, tarik scrollbar, scrollTo instan, resize besar), T langsung disamakan:
- * tidak memutar melewati banyak bentuk dalam sekejap. Scroll yang menempuh jarak sama dalam
- * banyak frame (flick) tidak termasuk: T mengejar dengan laju terbatas (minBreakSeconds).
+ * Bila T tertinggal lebih dari ini (dalam jumlah elemen) dari posisi scroll (mis. tombol End,
+ * resize besar, lompatan instan), T langsung disamakan: tidak memutar melewati banyak bentuk
+ * dalam sekejap. Pada gerak scroll biasa (smoothing ~0,28) T hampir tidak pernah tertinggal.
  */
 const JUMP_ELEMENTS = 1.5
 /** Scroll dianggap selesai bila tidak ada event scroll selama ini (fallback scrollend). */
@@ -455,6 +460,23 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   let hoverDraggable = false
   let cursorClass = ''
 
+  // ---- Gerbang anti-skip (params.gateEnabled) ----
+  const GATE_SAMPLES = 128
+  /** Riwayat posisi tengah viewport (px dokumen) per frame, untuk mendeteksi flick. */
+  const sampleTime = new Float64Array(GATE_SAMPLES)
+  const sampleMid = new Float64Array(GATE_SAMPLES)
+  let sampleHead = 0
+  let sampleCount = 0
+  /** Jeda (indeks urutan) yang sudah memicu gerbang pada lintasan ini. */
+  const gateFired = new Set<number>()
+  let gateAnim: { from: number; to: number; start: number } | null = null
+  let gateCooldownUntil = 0
+  let gateSuppressUntil = 0
+  let pointerHeld = false
+  let gateFires = 0
+  let lastWheelAt = 0
+  let lastWheelDelta = 0
+
   /** Uniform yang hanya bergantung pada parameter (bukan per frame). */
   function applyParamUniforms(): void {
     uniforms.uFieldRadius.value = Math.max(0.001, params.fieldRadius)
@@ -574,6 +596,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       heights[i] = rect.height || 1
     }
     measureSafeZone()
+    resetGate()
     dirty = true
   }
 
@@ -864,7 +887,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     lastTime = now
     const fading = stepColors(now)
     const target = scrollTarget(tops, heights, seq.length)
-    const previousTarget = lastTarget
     lastTarget = target
 
     if (reduce) {
@@ -897,24 +919,16 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
 
     time += dt / 1000
     const step = dt / FRAME_MS
+    stepGate(now)
     // Selama navigasi anchor jauh, T ditahan di elemen tujuan (lihat onClick).
     if (!navigating) {
-      const instantJump = previousTarget >= 0 && Math.abs(target - previousTarget) > JUMP_ELEMENTS
-      if (instantJump || Math.abs(target - T) > RATE_LIMIT.lagJump) {
+      if (Math.abs(target - T) > JUMP_ELEMENTS) {
         T = target
         resetPrev = true
       } else {
-        // Smoothing per frame 60 fps, dikonversi ke dt nyata (konsisten di 30/60/120 Hz).
-        let next = T + (target - T) * (1 - (1 - params.smoothing) ** step)
-        // Pembatas laju (anti-skip): di jeda T naik maks. 1 / minBreakSeconds per detik; di
-        // section boleh sectionFactor kali lebih cepat. Dua arah (scroll naik juga dibatasi).
-        if (params.minBreakSeconds > 0) {
-          const at = seq[Math.min(seq.length - 1, Math.max(0, Math.floor(T)))]
-          const perSecond = (at?.kind === 'break' ? 1 : RATE_LIMIT.sectionFactor) / params.minBreakSeconds
-          const maxStep = (perSecond * dt) / 1000
-          next = T + Math.min(maxStep, Math.max(-maxStep, next - T))
-        }
-        T = next
+        // Scrubbed: T mengikuti scroll dengan smoothing ringan (per frame 60 fps, dikonversi ke
+        // dt nyata: konsisten di 30/60/120 Hz). Tanpa pembatas laju dan tanpa jam sendiri.
+        T += (target - T) * (1 - (1 - params.smoothing) ** step)
         if (Math.abs(target - T) < SETTLE_EPSILON) T = target
       }
     }
@@ -930,7 +944,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     }
     // Menukar bentuk (bentuk lain masih termuat) selalu cepat; menyelesaikan scroll yang berhenti pelan.
     const swapping = state.shape >= 0 && state.shape !== currentShape
-    const rate = idle && !swapping ? SETTLE.rate : SETTLE.scrollRate
+    // Di section (state.shape < 0) tujuan selalu 0: surutkan cepat, tanpa sisa gerak zoom/bentuk.
+    const rate = idle && !swapping && state.shape >= 0 ? SETTLE.rate : SETTLE.scrollRate
     intensity += (goal - intensity) * (1 - (1 - rate) ** step)
     if (Math.abs(goal - intensity) < 0.0005) intensity = goal
     if (state.shape >= 0 && state.shape !== currentShape && intensity < RELEASED) {
@@ -1013,6 +1028,11 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
    * jeda di antaranya dan bentuk berkedip bergantian.
    */
   function onClick(event: MouseEvent): void {
+    // Klik tautan #anchor (menu, rail, footer): gerbang anti-skip tidak boleh ikut campur.
+    if ((event.target as Element | null)?.closest?.('a[href^="#"]')) {
+      gateSuppressUntil = performance.now() + GATE.suppressMs
+      gateAnim = null
+    }
     if (reduce || event.defaultPrevented || event.button !== 0) return
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     const link = (event.target as Element | null)?.closest?.('a[href^="#"]')
@@ -1062,6 +1082,137 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     schedule()
   }
 
+  // ---- Gerbang anti-skip ----
+
+  function resetGate(): void {
+    gateAnim = null
+    sampleCount = 0
+    sampleHead = 0
+  }
+
+  /** Alasan gerbang sedang tidak boleh terpicu ('' = siap); untuk panel dan pengujian. */
+  function gateBlocked(now: number): string {
+    if (!params.gateEnabled) return 'mati'
+    if (reduce) return 'reduced-motion'
+    if (navigating) return 'navigasi'
+    if (touching) return 'sentuh'
+    if (pointerHeld) return 'pointer'
+    if (now < gateSuppressUntil) return 'suppress'
+    if (now < gateCooldownUntil) return 'cooldown'
+    return ''
+  }
+
+  /** Pengguna mengambil alih: hentikan gerakan otomatis, cooldown singkat. */
+  function cancelGate(now: number): void {
+    if (!gateAnim) return
+    gateAnim = null
+    gateCooldownUntil = now + GATE.cooldownMs
+    sampleCount = 0
+  }
+
+  function startGate(index: number, now: number, viewport: number): void {
+    gateFired.add(index)
+    gateFires++
+    const to = Math.max(0, Math.round(tops[index] + heights[index] / 2 - viewport / 2))
+    const from = window.scrollY
+    if (Math.abs(to - from) < 8) return
+    gateAnim = { from, to, start: now }
+    sampleCount = 0
+  }
+
+  /**
+   * Per frame: lanjutkan gerakan otomatis bila ada, atau catat posisi tengah viewport dan cek
+   * apakah satu jeda baru saja dilewati seluruhnya (maju) dalam GATE.windowMs.
+   */
+  function stepGate(now: number): void {
+    if (!params.gateEnabled || reduce) {
+      if (gateAnim || sampleCount) resetGate()
+      return
+    }
+    if (gateAnim) {
+      const p = Math.min(1, (now - gateAnim.start) / GATE.durationMs)
+      const e = p < 0.5 ? 4 * p * p * p : 1 - (-2 * p + 2) ** 3 / 2
+      // 'instant': menimpa scroll-behavior: smooth di CSS; kita yang menghaluskan sendiri.
+      window.scrollTo({ top: gateAnim.from + (gateAnim.to - gateAnim.from) * e, behavior: 'instant' })
+      if (p >= 1) {
+        gateAnim = null
+        gateCooldownUntil = now + GATE.cooldownMs
+        sampleCount = 0
+      }
+      return
+    }
+    const viewport = document.documentElement.clientHeight || window.innerHeight
+    const mid = window.scrollY + viewport / 2
+    // Lompatan instan (scrollTo, Home/End, tarik scrollbar: > 1 viewport dalam SATU frame) bukan
+    // flick: riwayat dibuang supaya tidak terbaca sebagai melewati jeda.
+    if (sampleCount > 0 && Math.abs(mid - sampleMid[(sampleHead - 1 + GATE_SAMPLES) % GATE_SAMPLES]) > viewport) {
+      sampleCount = 0
+    }
+    sampleTime[sampleHead] = now
+    sampleMid[sampleHead] = mid
+    sampleHead = (sampleHead + 1) % GATE_SAMPLES
+    if (sampleCount < GATE_SAMPLES) sampleCount++
+    // Lintasan baru: penanda jeda dilepas bila pengguna kembali ke SEBELUM jeda (mid di atas
+    // awalnya) atau sudah jauh sesudahnya (lebih dari satu layar di bawah jeda).
+    for (const index of gateFired) {
+      if (mid < tops[index] || mid > tops[index] + heights[index] + viewport) gateFired.delete(index)
+    }
+    if (gateBlocked(now)) return
+    // Posisi tengah viewport tepat GATE.windowMs yang lalu (interpolasi linear antar sampel, jadi
+    // tidak bergantung pada frame rate); bila riwayat lebih pendek, pakai sampel tertua.
+    let oldest = mid
+    let newerTime = now
+    let newerMid = mid
+    for (let n = 1; n <= sampleCount; n++) {
+      const slot = (sampleHead - n + GATE_SAMPLES) % GATE_SAMPLES
+      const age = now - sampleTime[slot]
+      if (age > GATE.windowMs) {
+        const span = newerTime - sampleTime[slot]
+        const k = span > 0 ? (now - GATE.windowMs - sampleTime[slot]) / span : 1
+        oldest = sampleMid[slot] + (newerMid - sampleMid[slot]) * k
+        break
+      }
+      oldest = sampleMid[slot]
+      newerTime = sampleTime[slot]
+      newerMid = sampleMid[slot]
+    }
+    if (mid <= oldest) return // hanya gerak maju; scroll mundur tidak pernah memicu
+    for (let i = 0; i < seq.length; i++) {
+      if (seq[i].kind !== 'break' || gateFired.has(i)) continue
+      const top = tops[i]
+      const bottom = top + heights[i]
+      const covered = Math.min(Math.max(mid, top), bottom) - Math.min(Math.max(oldest, top), bottom)
+      if (covered > GATE.minFraction * heights[i]) {
+        startGate(i, now, viewport)
+        return
+      }
+    }
+  }
+
+  /** Roda: momentum trackpad (selang < 60 ms, arah sama, delta menurun) bukan pengambilalihan. */
+  const onGateWheel = (event: WheelEvent) => {
+    const now = performance.now()
+    const delta = event.deltaY
+    const momentum =
+      now - lastWheelAt < 60 && Math.sign(delta) === Math.sign(lastWheelDelta) && Math.abs(delta) <= Math.abs(lastWheelDelta)
+    lastWheelAt = now
+    lastWheelDelta = delta
+    if (gateAnim && now - gateAnim.start >= GATE.ignoreMs && !momentum) cancelGate(now)
+  }
+  const onGateTouch = () => cancelGate(performance.now())
+  const onGateKey = (event: KeyboardEvent) => {
+    const now = performance.now()
+    if (event.key === 'Home' || event.key === 'End') gateSuppressUntil = now + GATE.suppressMs
+    cancelGate(now)
+  }
+  const onGatePointerDown = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') pointerHeld = true
+    cancelGate(performance.now())
+  }
+  const onGatePointerUp = () => {
+    pointerHeld = false
+  }
+
   function setParams(next: PointFieldParams): void {
     if (destroyed) return
     const previous = params
@@ -1085,6 +1236,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   // ---- Event ----
   const onVisibility = () => {
     lastTime = 0
+    resetGate()
     if (document.hidden) {
       window.cancelAnimationFrame(raf)
       raf = 0
@@ -1205,6 +1357,13 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   window.addEventListener('touchmove', onTouchMove, passive)
   window.addEventListener('touchend', onTouchEnd, passive)
   window.addEventListener('touchcancel', onTouchEnd, passive)
+  window.addEventListener('wheel', onGateWheel, passive)
+  window.addEventListener('touchstart', onGateTouch, passive)
+  window.addEventListener('touchmove', onGateTouch, passive)
+  window.addEventListener('keydown', onGateKey, passive)
+  window.addEventListener('pointerdown', onGatePointerDown, passive)
+  window.addEventListener('pointerup', onGatePointerUp, passive)
+  window.addEventListener('pointercancel', onGatePointerUp, passive)
   if ('fonts' in document) {
     document.fonts.ready.then(() => {
       if (!destroyed) remeasure()
@@ -1237,6 +1396,13 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     window.removeEventListener('touchmove', onTouchMove)
     window.removeEventListener('touchend', onTouchEnd)
     window.removeEventListener('touchcancel', onTouchEnd)
+    window.removeEventListener('wheel', onGateWheel)
+    window.removeEventListener('touchstart', onGateTouch)
+    window.removeEventListener('touchmove', onGateTouch)
+    window.removeEventListener('keydown', onGateKey)
+    window.removeEventListener('pointerdown', onGatePointerDown)
+    window.removeEventListener('pointerup', onGatePointerUp)
+    window.removeEventListener('pointercancel', onGatePointerUp)
     mat?.style.removeProperty('--mat-offset')
     geometry.dispose()
     material.dispose()
@@ -1293,6 +1459,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
         readColors: colors.slice(3).map((color) => color.getHexString()),
         effective: readTarget() + (readStats(params).mean - readTarget()) * uniforms.uPeak.value,
         peak: uniforms.uPeak.value,
+        gate: { active: gateAnim !== null, fires: gateFires, blocked: gateBlocked(performance.now()), fired: [...gateFired], samples: sampleCount },
         safeZone: { on: uniforms.uSafeOn.value > 0, left: safeLeft, right: safeRight },
       }
     },

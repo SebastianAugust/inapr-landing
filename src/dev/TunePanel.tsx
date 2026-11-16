@@ -14,7 +14,7 @@ import {
   BREAK_HEIGHT,
   GEOMETRY_KEYS,
   POINTFIELD_DEFAULTS,
-  RATE_LIMIT,
+  GATE,
   readStats,
   ZOOM_DIRECTIONS,
   type PointFieldParams,
@@ -39,7 +39,7 @@ const FALLBACK_READ_COLORS: ReadColors = {
 }
 const HEX = /^#[0-9a-f]{6}$/i
 
-type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections'>
+type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections' | 'gateEnabled'>
 type AngleKey = 'yaw' | 'pitch'
 
 interface Spec {
@@ -71,7 +71,14 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
   {
     title: 'Kamera & scroll',
     specs: [
-      { key: 'smoothing', label: 'Smoothing scroll', min: 0.01, max: 0.5, step: 0.01 },
+      {
+        key: 'smoothing',
+        label: 'Smoothing scroll (scrubbed; besar = menempel)',
+        min: 0.05,
+        max: 1,
+        step: 0.01,
+        hint: (p) => 'T sampai 95% posisi scroll dalam ≈ ' + (Math.log(0.05) / Math.log(1 - Math.min(0.999, p.smoothing)) / 60).toFixed(2) + ' s',
+      },
       { key: 'cameraFar', label: 'Jarak kamera netral (zoom out)', min: 4, max: 40, step: 0.5 },
       { key: 'cameraNear', label: 'Jarak kamera ke bentuk (zoom in)', min: 2, max: 30, step: 0.5 },
       { key: 'zoomReach', label: 'Jarak fokus dari pusat (arah zoom)', min: 0, max: 20, step: 0.5 },
@@ -85,22 +92,22 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
     note: 'Fraksi progres jeda: zoom in 0 → akhir bentuk, tahan → akhir tahan, lalu lepas + zoom out → 1.',
     specs: [
       { key: 'phaseFormEnd', label: 'Akhir zoom in / bentuk', min: 0.05, max: 0.9, step: 0.01 },
-      { key: 'phaseHoldEnd', label: 'Akhir tahan', min: 0.06, max: 0.95, step: 0.01 },
       {
-        key: 'minBreakSeconds',
-        label: 'Durasi minimum satu jeda (anti-skip, detik; 0 = mati)',
+        key: 'phaseHoldEnd',
+        label: 'Akhir tahan',
+        min: 0.06,
+        max: 0.95,
+        step: 0.01,
+        hint: (p) =>
+          'zoom in ' + pct(p.phaseFormEnd) + ' · tahan ' + pct(p.phaseHoldEnd - p.phaseFormEnd) + ' · lepas + zoom out ' + pct(1 - p.phaseHoldEnd) + ' dari tinggi jeda',
+      },
+      {
+        key: 'zoomEase',
+        label: 'Easing zoom (0 = smoothstep, 1 = linear)',
         min: 0,
-        max: 5,
-        step: 0.1,
-        hint: (p) => {
-          const form = p.phaseFormEnd
-          const hold = p.phaseHoldEnd - p.phaseFormEnd
-          const out = 1 - p.phaseHoldEnd
-          const sec = (fraction: number) => (fraction * p.minBreakSeconds).toFixed(2) + 's'
-          return p.minBreakSeconds > 0
-            ? 'zoom in ≥ ' + sec(form) + ' · tahan ≥ ' + sec(hold) + ' · zoom out ≥ ' + sec(out) + ' · section ≥ ' + (p.minBreakSeconds / RATE_LIMIT.sectionFactor).toFixed(2) + 's'
-            : 'tanpa pembatas laju'
-        },
+        max: 1,
+        step: 0.05,
+        hint: (p) => 'kemiringan di tengah ≈ ' + (1.5 - 0.5 * p.zoomEase).toFixed(2) + '× linear (1.00 = sebanding scroll)',
       },
     ],
   },
@@ -249,6 +256,7 @@ function sanitize(raw: unknown): PointFieldParams {
     const value = source[key]
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
   }
+  if (typeof source.gateEnabled === 'boolean') out.gateEnabled = source.gateEnabled
   for (const key of ['yaw', 'pitch'] as const) {
     const list = source[key]
     if (Array.isArray(list) && list.length === out[key].length && list.every((v) => typeof v === 'number' && Number.isFinite(v))) {
@@ -403,7 +411,7 @@ const tidy = (value: number) => Number(value.toFixed(4))
 
 /** Objek siap tempel ke src/config/pointfield.ts, plus warna baca (tokens.css) dan status snap. */
 function toSource(params: PointFieldParams, extras: Extras): string {
-  const lines = SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)
+  const lines = [...SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`), `  gateEnabled: ${params.gateEnabled},`]
   const list = (values: readonly number[]) => values.map(tidy).join(', ')
   const tokens = (theme: ThemeName) => READ_TOKENS.map((token, i) => '  ' + token + ': ' + extras.colors[theme][i] + ';')
   return [
@@ -604,6 +612,8 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         <span className="tp-muted">opasitas efektif</span> {debug.effective.toFixed(2)}
         {debug.safeZone.on && <span className="tp-muted"> · zona aman</span>}
         {' · '}
+        <span className="tp-muted">gerbang</span> {debug.gate.active ? 'jalan' : 'siap'} ({debug.gate.fires}×)
+        {' · '}
         <span className="tp-muted">bentuk</span> {debug.shape >= 0 ? BREAK_SHAPES[debug.shape] : '–'}
         <br />
         <span className="tp-muted">N</span> {debug.count} ({debug.device}) · <span className="tp-muted">FOV</span> {debug.fov.toFixed(1)}°
@@ -654,11 +664,21 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         ))}
 
         <fieldset className="tp-group">
-          <legend className="tp-legend">Tinggi jeda</legend>
+          <legend className="tp-legend">Tinggi jeda &amp; gerbang anti-skip</legend>
           <p className="tp-note">
-            Diterapkan langsung (inline di tiap jeda) dan tersimpan di panel; nilai di config (BREAK_HEIGHT) baru berlaku
-            setelah menempel dan reload halaman. Lebih tinggi dari viewport = jeda tak terlewat satu layar.
+            Tinggi diterapkan langsung (inline di tiap jeda) dan tersimpan di panel; nilai di config (BREAK_HEIGHT) baru berlaku
+            setelah menempel dan reload halaman. Gerbang: flick yang melewati &gt; {pct(GATE.minFraction)} tinggi satu jeda dalam {GATE.windowMs} ms
+            memicu scroll halus {GATE.durationMs} ms ke tengah jeda (sekali per lintasan); input pengguna membatalkan.
           </p>
+          <div className="tp-row tp-colors">
+            <label htmlFor={uid + '-gate'}>Gerbang anti-skip aktif</label>
+            <input
+              id={uid + '-gate'}
+              type="checkbox"
+              checked={params.gateEnabled}
+              onChange={(event) => setParams((current) => ({ ...current, gateEnabled: event.target.checked }))}
+            />
+          </div>
           {(['desktop', 'mobile'] as const).map((key) => (
             <div key={key} className="tp-row">
               <label htmlFor={uid + '-bh-' + key}>{key === 'desktop' ? 'Desktop (vh, ≥ 768px)' : 'Mobile (svh, < 768px)'}</label>

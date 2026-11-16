@@ -8,7 +8,7 @@
  */
 import type { PointFieldParams } from '@/config/pointfield'
 
-type MapParams = Pick<PointFieldParams, 'phaseFormEnd' | 'phaseHoldEnd' | 'yaw' | 'pitch'>
+type MapParams = Pick<PointFieldParams, 'phaseFormEnd' | 'phaseHoldEnd' | 'zoomEase' | 'yaw' | 'pitch'>
 
 /** Satu elemen urutan scroll: section (indeks data-section) atau jeda (indeks data-break). */
 export interface SeqItem {
@@ -45,6 +45,16 @@ export function smoothstep(a: number, b: number, x: number): number {
 
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
+}
+
+/**
+ * Easing fase masuk/lepas: campuran smoothstep dan linear. k = 0 smoothstep murni, k = 1 linear.
+ * Tengah hampir linear (kemiringan 1 + 0,5·(1−k)) tapi ujung tetap melandai bila k < 1.
+ */
+export function easeZoom(t: number, k: number): number {
+  const x = Math.min(1, Math.max(0, t))
+  const smooth = x * x * (3 - 2 * x)
+  return smooth + (x - smooth) * Math.min(1, Math.max(0, k))
 }
 
 /** Batas fase yang aman: [akhir bentuk-terbentuk, akhir tahan], keduanya di 0.05..0.95. */
@@ -103,7 +113,8 @@ export function computeFrame(T: number, seq: readonly SeqItem[], out: FrameState
   out.yaw = yaw[g]
   out.pitch = pitch[g]
   out.shape = item.index
-  out.intensity = f < form ? smoothstep(0, form, f) : f <= hold ? 1 : 1 - smoothstep(hold, 1, f)
+  out.intensity =
+    f < form ? easeZoom(f / form, params.zoomEase) : f <= hold ? 1 : 1 - easeZoom((f - hold) / (1 - hold), params.zoomEase)
   out.hold = Math.min(1, Math.max(0, (f - form) / (hold - form)))
   out.releasing = f > hold
   return out
