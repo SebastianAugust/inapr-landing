@@ -10,9 +10,9 @@ import { useEffect, useId, useRef, useState } from 'react'
 import {
   GEOMETRY_KEYS,
   POINTFIELD_DEFAULTS,
-  SHAPE_SIDES,
+  ZOOM_DIRECTIONS,
   type PointFieldParams,
-  type ShapeSide,
+  type ZoomDirection,
 } from '@/config/pointfield'
 import { BREAK_SHAPES, SECTION_IDS } from '@/lib/sections'
 import type { PointFieldDebug, PointFieldEngine } from '@/pointfield/engine'
@@ -20,7 +20,7 @@ import type { PointFieldDebug, PointFieldEngine } from '@/pointfield/engine'
 const STORAGE_KEY = 'inapr-tune'
 const REBUILD_DELAY = 300
 
-type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'sides'>
+type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections'>
 type AngleKey = 'yaw' | 'pitch'
 
 interface Spec {
@@ -48,10 +48,10 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
     title: 'Kamera & scroll',
     specs: [
       { key: 'smoothing', label: 'Smoothing scroll', min: 0.01, max: 0.5, step: 0.01 },
-      { key: 'cameraFar', label: 'Jarak zoom-out (netral)', min: 4, max: 40, step: 0.5 },
-      { key: 'cameraNear', label: 'Jarak zoom-in', min: 1, max: 30, step: 0.5 },
-      { key: 'sideShift', label: 'Geser ke sisi', min: 0, max: 8, step: 0.1 },
-      { key: 'sideLook', label: 'Menengok ke sisi', min: 0, max: 8, step: 0.1 },
+      { key: 'cameraFar', label: 'Jarak kamera netral (zoom out)', min: 4, max: 40, step: 0.5 },
+      { key: 'cameraNear', label: 'Jarak kamera ke bentuk (zoom in)', min: 2, max: 30, step: 0.5 },
+      { key: 'zoomReach', label: 'Jarak fokus dari pusat (arah zoom)', min: 0, max: 20, step: 0.5 },
+      { key: 'pathCurve', label: 'Kelengkungan jalur kamera', min: 0, max: 1, step: 0.05 },
       { key: 'holdDrift', label: 'Drift saat tahan (rad)', min: 0, max: 0.3, step: 0.005 },
       { key: 'matParallax', label: 'Parallax cutting mat', min: 0, max: 0.5, step: 0.01 },
     ],
@@ -66,20 +66,30 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
   },
   {
     title: 'Bentuk',
-    note: 'Ukuran = fraksi viewport. Morph penuh butuh kecepatan − sebaran ≥ 1.',
+    note: 'Bentuk selalu di tengah layar pada puncak zoom. Morph penuh butuh kecepatan − sebaran ≥ 1.',
     specs: [
       { key: 'shapeShare', label: 'Proporsi titik bentuk', min: 0.05, max: 1, step: 0.01 },
-      { key: 'shapeDepth', label: 'Jarak bentuk dari kamera', min: 2, max: 30, step: 0.5 },
-      { key: 'shapeSizeWide', label: 'Ukuran kiri/kanan (× tinggi)', min: 0.1, max: 0.8, step: 0.01 },
-      { key: 'shapeSizeBand', label: 'Ukuran atas/bawah (× tinggi)', min: 0.1, max: 0.6, step: 0.01 },
-      { key: 'shapeSizeNarrow', label: 'Ukuran < 1024px (× lebar)', min: 0.1, max: 0.9, step: 0.01 },
-      { key: 'sideOffsetX', label: 'Pusat dari tepi kiri/kanan', min: 0.1, max: 0.5, step: 0.01 },
-      { key: 'bandOffsetY', label: 'Pusat dari tepi atas/bawah', min: 0.1, max: 0.5, step: 0.01 },
+      { key: 'shapeSize', label: 'Tinggi bentuk (× tinggi viewport)', min: 0.1, max: 0.9, step: 0.01 },
+      { key: 'shapeMaxWidth', label: 'Batas lebar bentuk (× lebar viewport)', min: 0.2, max: 1, step: 0.01 },
       { key: 'shapeSpin', label: 'Rotasi lokal (rad/s)', min: 0, max: 1.5, step: 0.01 },
       { key: 'shapeTiltY', label: 'Kemiringan Y (rad)', min: -3.14, max: 3.14, step: 0.01 },
       { key: 'shapeTiltX', label: 'Kemiringan X (rad)', min: -3.14, max: 3.14, step: 0.01 },
       { key: 'morphSpeed', label: 'Kecepatan morph', min: 0.5, max: 4, step: 0.05 },
       { key: 'delaySpread', label: 'Sebaran delay per titik', min: 0, max: 2, step: 0.05 },
+    ],
+  },
+  {
+    title: 'Kedalaman & efek zoom',
+    note: 'Pulsa FOV dan streak: 0 = mati.',
+    specs: [
+      { key: 'depthSize', label: 'Ukuran dekat/jauh (kekuatan)', min: 0, max: 2, step: 0.05 },
+      { key: 'depthOpacity', label: 'Opasitas dekat/jauh (kekuatan)', min: 0, max: 1, step: 0.05 },
+      { key: 'depthRange', label: 'Jarak "paling jauh" (dunia)', min: 5, max: 80, step: 1 },
+      { key: 'nearFade', label: 'Fade dekat kamera (dunia)', min: 0.2, max: 6, step: 0.1 },
+      { key: 'sizeVariation', label: 'Variasi ukuran per titik (±)', min: 0, max: 0.9, step: 0.05 },
+      { key: 'brightnessVariation', label: 'Variasi kecerahan per titik', min: 0, max: 0.9, step: 0.05 },
+      { key: 'fovPulse', label: 'Pulsa FOV (derajat)', min: 0, max: 25, step: 0.5 },
+      { key: 'streakStrength', label: 'Streak (per px/frame)', min: 0, max: 0.6, step: 0.01 },
     ],
   },
   {
@@ -101,20 +111,21 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
   },
   {
     title: 'Titik & field',
-    note: 'Jumlah titik dan radius field → geometri dibangun ulang (jeda 300 ms).',
+    note: 'Jumlah titik, radius, dan bias pusat → geometri dibangun ulang (jeda 300 ms).',
     specs: [
       { key: 'pointSize', label: 'Ukuran titik', min: 0.01, max: 0.3, step: 0.005 },
       { key: 'pointOpacity', label: 'Opasitas titik', min: 0.1, max: 1, step: 0.05 },
-      { key: 'countDesktop', label: 'Jumlah (desktop)', min: 200, max: 12000, step: 100 },
-      { key: 'countLowPower', label: 'Jumlah (perangkat lemah)', min: 200, max: 8000, step: 100 },
-      { key: 'countMobile', label: 'Jumlah (mobile)', min: 200, max: 6000, step: 100 },
-      { key: 'fieldRadius', label: 'Radius field', min: 5, max: 60, step: 1 },
+      { key: 'countDesktop', label: 'Jumlah (desktop)', min: 200, max: 40000, step: 500 },
+      { key: 'countLowPower', label: 'Jumlah (perangkat lemah)', min: 200, max: 24000, step: 500 },
+      { key: 'countMobile', label: 'Jumlah (mobile)', min: 200, max: 16000, step: 500 },
+      { key: 'fieldRadius', label: 'Radius field (ketebalan volume)', min: 5, max: 80, step: 1 },
+      { key: 'fieldCoreBias', label: 'Bias kerapatan ke pusat', min: 0, max: 1, step: 0.05 },
     ],
   },
 ]
 
-/** Label sisi untuk dropdown. */
-const SIDE_LABELS: Record<ShapeSide, string> = {
+/** Label arah zoom untuk dropdown. */
+const DIRECTION_LABELS: Record<ZoomDirection, string> = {
   left: 'Kiri',
   right: 'Kanan',
   top: 'Atas',
@@ -125,8 +136,8 @@ const SIDE_LABELS: Record<ShapeSide, string> = {
   'bottom-right': 'Kanan bawah',
 }
 
-const isSide = (value: unknown): value is ShapeSide =>
-  typeof value === 'string' && (SHAPE_SIDES as readonly string[]).includes(value)
+const isDirection = (value: unknown): value is ZoomDirection =>
+  typeof value === 'string' && (ZOOM_DIRECTIONS as readonly string[]).includes(value)
 
 const SCALAR_KEYS = GROUPS.flatMap((group) => group.specs.map((spec) => spec.key))
 
@@ -139,7 +150,7 @@ function defaults(): PointFieldParams {
     ...POINTFIELD_DEFAULTS,
     yaw: [...POINTFIELD_DEFAULTS.yaw],
     pitch: [...POINTFIELD_DEFAULTS.pitch],
-    sides: [...POINTFIELD_DEFAULTS.sides],
+    zoomDirections: [...POINTFIELD_DEFAULTS.zoomDirections],
   }
 }
 
@@ -158,8 +169,8 @@ function sanitize(raw: unknown): PointFieldParams {
       out[key] = list as number[]
     }
   }
-  const sides = source.sides
-  if (Array.isArray(sides) && sides.length === out.sides.length && sides.every(isSide)) out.sides = sides
+  const dirs = source.zoomDirections
+  if (Array.isArray(dirs) && dirs.length === out.zoomDirections.length && dirs.every(isDirection)) out.zoomDirections = dirs
   return out
 }
 
@@ -205,7 +216,7 @@ function toSource(params: PointFieldParams): string {
     ...lines,
     `  yaw: Object.freeze([${list(params.yaw)}]),`,
     `  pitch: Object.freeze([${list(params.pitch)}]),`,
-    `  sides: Object.freeze([${params.sides.map((side) => `'${side}'`).join(', ')}] as const),`,
+    `  zoomDirections: Object.freeze([${params.zoomDirections.map((dir) => `'${dir}'`).join(', ')}] as const),`,
     '})',
     '',
   ].join('\n')
@@ -283,12 +294,12 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
     })
   }
 
-  const setSide = (index: number, value: string) => {
-    if (!isSide(value)) return
+  const setDirection = (index: number, value: string) => {
+    if (!isDirection(value)) return
     setParams((current) => {
-      const sides = [...current.sides]
-      sides[index] = value
-      return { ...current, sides }
+      const zoomDirections = [...current.zoomDirections]
+      zoomDirections[index] = value
+      return { ...current, zoomDirections }
     })
   }
 
@@ -314,7 +325,7 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
   const bodyId = `${uid}-body`
   const position =
     debug.kind === 'break'
-      ? `jeda ${debug.index + 1} (${BREAK_SHAPES[debug.index] ?? '?'}, ${params.sides[debug.index] ?? '?'})`
+      ? `jeda ${debug.index + 1} (${BREAK_SHAPES[debug.index] ?? '?'}, zoom ${params.zoomDirections[debug.index] ?? '?'})`
       : debug.kind === 'section'
         ? `section ${debug.index + 1} (${SECTION_IDS[debug.index] ?? '?'})`
         : '–'
@@ -346,7 +357,9 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         {' · '}
         <span className="tp-muted">bentuk</span> {debug.shape >= 0 ? BREAK_SHAPES[debug.shape] : '–'}
         <br />
-        <span className="tp-muted">N</span> {debug.count} ({debug.device}, {debug.wide ? '≥ 1024px' : '< 1024px'})
+        <span className="tp-muted">N</span> {debug.count} ({debug.device}) · <span className="tp-muted">FOV</span> {debug.fov.toFixed(1)}°
+        {' · '}
+        <span className="tp-muted">pusat bentuk</span> {debug.shapeNdc[0].toFixed(2)}, {debug.shapeNdc[1].toFixed(2)}
         {' · '}
         <span className="tp-muted">pointer</span> {debug.pointer.toFixed(2)} · <span className="tp-muted">riak</span> {debug.ripples}
         {debug.dragging && <span className="tp-accent"> · drag</span>}
@@ -391,11 +404,11 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         ))}
 
         <table className="tp-table">
-          <caption className="tp-caption">Per section: yaw / pitch netral (rad) + sisi bentuk di jeda sesudahnya</caption>
+          <caption className="tp-caption">Per section: yaw / pitch netral (rad) + arah zoom di jeda sesudahnya</caption>
           <thead>
             <tr>
               <th scope="col">Section</th>
-              <th scope="col">Sisi jeda</th>
+              <th scope="col">Arah zoom</th>
               <th scope="col">Yaw</th>
               <th scope="col">Pitch</th>
             </tr>
@@ -407,16 +420,16 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
                   {i + 1}. {SECTION_IDS[i]}
                 </th>
                 <td>
-                  {i < params.sides.length ? (
+                  {i < params.zoomDirections.length ? (
                     <select
-                      aria-label={`Sisi bentuk jeda ${i + 1} (${BREAK_SHAPES[i]}), sesudah section ${i + 1}`}
-                      value={params.sides[i]}
-                      onChange={(event) => setSide(i, event.target.value)}
+                      aria-label={`Arah zoom jeda ${i + 1} (${BREAK_SHAPES[i]}), sesudah section ${i + 1}`}
+                      value={params.zoomDirections[i]}
+                      onChange={(event) => setDirection(i, event.target.value)}
                       className="tp-select"
                     >
-                      {SHAPE_SIDES.map((side) => (
-                        <option key={side} value={side}>
-                          {SIDE_LABELS[side]}
+                      {ZOOM_DIRECTIONS.map((dir) => (
+                        <option key={dir} value={dir}>
+                          {DIRECTION_LABELS[dir]}
                         </option>
                       ))}
                     </select>

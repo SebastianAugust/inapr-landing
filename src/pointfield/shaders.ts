@@ -1,28 +1,33 @@
 /**
- * Shader titik. Semua gerak per titik dihitung di GPU; CPU hanya mengubah uniform.
+ * Shader titik. Semua gerak dan tampilan per titik dihitung di GPU; CPU hanya mengubah
+ * uniform. Satu draw call untuk seluruh titik.
  *
- * Bintang (revolusi galaksi):
+ * Bintang (revolusi galaksi, tetap jalan selama zoom):
  *   rn    = |position| / uFieldRadius                       (0 di pusat, 1 di tepi)
  *   speed = uRevSpeed * (1 + uRevCore * (1 - rn)) * (1 + uRevVar * aSpin)
  *   p     = rotasiY(uTime * speed) * position + gerak halus (sinus per titik, fase aPhase)
  *   star  = uRevTilt * p                                     (kemiringan bidang putar)
  *
- * Titik bentuk (aSelect < uShapeShare) berpindah ke bentuk:
+ * Titik bentuk (aSelect < uShapeShare) berpindah ke bentuk di titik fokus zoom:
  *   target = uShapeCenter + uShapeRot * (aTarget * uShapeScale)
  *   w      = smoothstep(0, 1, clamp(uMorph * uMorphSpeed - aDelay * uDelaySpread, 0, 1))
  *   posisi = mix(star, target, w)
- * Karena `star` terus berputar, bentuk yang dilepas kembali ke bintang yang sedang bergerak.
  *
  * Interaksi pointer (stateless, fungsi jarak di ruang layar; satuan NDC, tinggi layar = 2,
- * x dikoreksi rasio aspek):
- *   dorong = arah menjauh dari kursor * uPushStrength * (1 - smoothstep(0, uPushRadius, d))² * uPointerActive
- *   riak i = arah menjauh dari pusat riak * uRippleStrength * amp * e^(-umur*uRippleDamping)
- *            * e^(-((d - umur*uRippleSpeed) / uRippleWidth)²)
- *   Titik bentuk memakai pengali uPushShape. Perpindahan NDC dikonversi ke ruang kamera
- *   (dikali kedalaman), jadi besarnya di layar sama untuk titik dekat maupun jauh.
+ * x dikoreksi rasio aspek): dorong menjauh dari kursor dan riak radial (maks. 3). Titik
+ * bentuk memakai pengali uPushShape. Perpindahan NDC dikonversi ke ruang kamera (dikali
+ * kedalaman), jadi besarnya di layar sama untuk titik dekat maupun jauh.
  *
- * Ukuran titik meniru PointsMaterial (sizeAttenuation): size * pixelRatio * (scale / -z),
- * dibatasi uSizeMax (bintang yang sangat dekat kamera tidak membesar tanpa batas).
+ * Kesan kedalaman:
+ *   depth   = -z kamera;  dn = smoothstep(0, 1, (depth - 1) / uDepthRange)
+ *   ukuran  = perspektif (1/depth) × mix(besar, kecil, dn) × variasi acak aSeed, dibatasi uSizeMax
+ *   opasitas= uOpacity × mix(1, redup, dn) × kecerahan acak × fade dekat bidang near
+ *   Titik bentuk (w → 1) mengabaikan pelemahan jarak supaya bentuk terbaca solid.
+ *
+ * Streak: kecepatan layar tiap titik = selisih proyeksi dengan matriks view-proyeksi frame
+ * sebelumnya (uPrevViewProj). Sprite memanjang searah kecepatan itu (aliran radial saat
+ * zoom, geser saat kamera menyimpang) sebanding panjang gerak; fragment shader menggambar
+ * elips di dalam sprite persegi yang diperbesar sebesar `stretch`.
  */
 export const vertexShader = /* glsl */ `
 uniform float uTime;
@@ -43,6 +48,7 @@ uniform float uDelaySpread;
 uniform float uSize;
 uniform float uSizeMax;
 uniform float uScale;
+uniform float uOpacity;
 uniform float uAspect;
 uniform float uTanHalfFov;
 uniform vec2 uPointer;
@@ -55,6 +61,17 @@ uniform float uRippleSpeed;
 uniform float uRippleStrength;
 uniform float uRippleWidth;
 uniform float uRippleDamping;
+uniform float uDepthSize;
+uniform float uDepthOpacity;
+uniform float uDepthRange;
+uniform float uNearFade;
+uniform float uSizeVar;
+uniform float uBrightVar;
+uniform mat4 uPrevViewProj;
+uniform vec2 uResolution;
+uniform float uFrameScale;
+uniform float uStreak;
+uniform float uStreakMax;
 uniform vec3 uColor1;
 uniform vec3 uColor2;
 uniform vec3 uColor3;
@@ -65,8 +82,12 @@ attribute float aPalette;
 attribute float aSelect;
 attribute float aSpin;
 attribute float aPhase;
+attribute float aSeed;
 
 varying vec3 vColor;
+varying float vAlpha;
+varying vec2 vDir;
+varying float vStretch;
 
 void main() {
   float rn = clamp(length(position) / uFieldRadius, 0.0, 1.0);
@@ -86,6 +107,17 @@ void main() {
 
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   vec4 clip = projectionMatrix * mv;
+
+  // Kecepatan layar (px per frame 60 fps) dari selisih proyeksi dengan frame sebelumnya.
+  vec2 vel = vec2(0.0);
+  vec4 prev = uPrevViewProj * vec4(pos, 1.0);
+  if (clip.w > 0.0 && prev.w > 0.0) {
+    vel = (clip.xy / clip.w - prev.xy / prev.w) * 0.5 * uResolution * uFrameScale;
+  }
+  float velLen = length(vel);
+  float stretch = 1.0 + min(velLen * uStreak, uStreakMax);
+  vDir = velLen > 0.0001 ? vel / velLen : vec2(1.0, 0.0);
+  vStretch = stretch;
 
   if (clip.w > 0.0) {
     vec2 ndc = clip.xy / clip.w;
@@ -114,18 +146,42 @@ void main() {
     clip = projectionMatrix * mv;
   }
 
+  // ---- Kedalaman: ukuran, opasitas, variasi, fade dekat kamera ----
+  float depth = max(-mv.z, 0.001);
+  float dn = smoothstep(0.0, 1.0, clamp((depth - 1.0) / max(uDepthRange, 1.0), 0.0, 1.0));
+  dn *= 1.0 - w * 0.85; // titik bentuk tetap solid
+  float sizeDepth = mix(1.0 + 0.5 * uDepthSize, 1.0 - 0.4 * uDepthSize, dn);
+  float sizeVar = 1.0 + uSizeVar * (aSeed * 2.0 - 1.0);
+  float size = min(uSize * (uScale / depth) * sizeDepth * sizeVar, uSizeMax);
+
+  float alpha = uOpacity * mix(1.0, 1.0 - 0.75 * uDepthOpacity, dn);
+  alpha *= 1.0 - uBrightVar * fract(aSeed * 91.7);
+  alpha *= smoothstep(0.15, max(uNearFade, 0.2), depth);
+  alpha /= 1.0 + 0.35 * (stretch - 1.0);
+
   gl_Position = clip;
-  gl_PointSize = min(uSize * (uScale / max(-mv.z, 0.001)), uSizeMax);
+  // Sprite persegi dirasterisasi penuh: batasi ukuran akhir (streak ikut) demi fill-rate.
+  gl_PointSize = min(size * stretch, uSizeMax * 3.0);
+  vAlpha = alpha;
   vColor = aPalette < 0.5 ? uColor1 : (aPalette < 1.5 ? uColor2 : uColor3);
 }
 `
 
 export const fragmentShader = /* glsl */ `
-uniform float uOpacity;
 varying vec3 vColor;
+varying float vAlpha;
+varying vec2 vDir;
+varying float vStretch;
 
 void main() {
-  gl_FragColor = vec4(vColor, uOpacity);
+  // Koordinat sprite -1..1 (y ke atas, sama dengan NDC), lalu elips memanjang searah vDir.
+  vec2 q = (gl_PointCoord - 0.5) * 2.0;
+  q.y = -q.y;
+  vec2 perp = vec2(-vDir.y, vDir.x);
+  float r = length(vec2(dot(q, vDir), dot(q, perp) * vStretch));
+  if (r > 1.0) discard;
+  float soft = 1.0 - smoothstep(0.45, 1.0, r);
+  gl_FragColor = vec4(vColor, vAlpha * soft);
   #include <colorspace_fragment>
 }
 `

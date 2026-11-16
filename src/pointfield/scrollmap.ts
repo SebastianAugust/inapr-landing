@@ -21,7 +21,7 @@ export interface FrameState {
   /** Posisi di urutan (indeks elemen aktif) dan progres di dalamnya (0..1). */
   item: number
   progress: number
-  /** Arah pandang netral (yaw/pitch); di jeda berpindah ke section berikut saat fase lepas. */
+  /** Arah pandang netral (yaw/pitch): berputar pelan di dalam section, tetap di jeda. */
   yaw: number
   pitch: number
   /** Indeks bentuk (= data-break 0..6) bila di jeda, -1 di section. */
@@ -83,23 +83,25 @@ export function computeFrame(T: number, seq: readonly SeqItem[], out: FrameState
   out.releasing = false
 
   if (!item || item.kind === 'section') {
-    // Section: netral, hanya bintang.
+    // Section: netral, hanya bintang. Arah pandang berputar pelan selama section dibaca,
+    // dari yang berlaku di akhir section sebelumnya ke miliknya, jadi tidak ada lompatan
+    // di perbatasan dan zoom out di jeda tidak ikut berputar (hanya membalik jalur zoom in).
     const k = item ? Math.min(item.index, yaw.length - 1) : 0
-    out.yaw = yaw[k]
-    out.pitch = pitch[k]
+    const t = k === 0 ? 0 : smoothstep(0.05, 0.95, f)
+    out.yaw = lerp(yaw[Math.max(0, k - 1)], yaw[k], t)
+    out.pitch = lerp(pitch[Math.max(0, k - 1)], pitch[k], t)
     out.shape = -1
     out.intensity = 0
     return out
   }
 
   // Jeda g (antara section g dan g+1). ZOOM IN 0..form, TAHAN form..hold, LEPAS hold..1.
-  // Arah pandang tetap milik section g sampai fase lepas, lalu berpindah halus ke g+1
-  // (bersamaan dengan zoom-out), jadi section berikutnya dimulai tepat di posisi netralnya.
-  const g = Math.min(item.index, yaw.length - 2)
+  // Arah pandang netral tetap milik section g sepanjang jeda: zoom in dan zoom out memakai
+  // pose netral yang sama, jadi zoom out membalik jalur zoom in.
+  const g = Math.min(item.index, yaw.length - 1)
   const [form, hold] = phaseBounds(params)
-  const turn = smoothstep(hold, 1, f)
-  out.yaw = lerp(yaw[g], yaw[g + 1], turn)
-  out.pitch = lerp(pitch[g], pitch[g + 1], turn)
+  out.yaw = yaw[g]
+  out.pitch = pitch[g]
   out.shape = item.index
   out.intensity = f < form ? smoothstep(0, form, f) : f <= hold ? 1 : 1 - smoothstep(hold, 1, f)
   out.hold = Math.min(1, Math.max(0, (f - form) / (hold - form)))

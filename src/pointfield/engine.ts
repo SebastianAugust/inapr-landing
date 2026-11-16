@@ -6,14 +6,20 @@
  * - Satu skalar scroll T yang dihaluskan memetakan urutan [data-section]/[data-break] ke
  *   intensitas bentuk I. Section selalu netral (I = 0, hanya bintang); di tiap jeda:
  *   ZOOM IN + bentuk terbentuk → TAHAN → LEPAS + ZOOM OUT. I menggerakkan morph titik
- *   bentuk DAN zoom kamera ke sisi bentuk, jadi keduanya selalu sinkron.
+ *   bentuk DAN posisi kamera pada jalurnya, jadi keduanya selalu sinkron.
+ * - ARAH ZOOM (kiri/kanan/atas/bawah/sudut) per jeda bukan posisi bentuk di layar, melainkan
+ *   ke mana kamera menyimpang: titik fokus C = arah zoom × zoomReach dari pusat field.
+ *   Kamera bergerak di kurva Bézier kuadratik dari pose netral (jarak cameraFar, melihat
+ *   pusat field) ke pose puncak (jarak cameraNear dari C, melihat C), sementara titik
+ *   pandangnya berpindah dari pusat ke C. Bentuk terbentuk di C, jadi pada puncak zoom ia
+ *   selalu tepat di tengah layar, dan aliran titik di layar berlawanan arah zoom.
  * - Interaksi pointer (listener pasif di window; canvas tetap pointer-events: none):
  *   parallax kamera, medan dorong kursor, dan riak klik/tap. Dorong dan riak dihitung di
  *   GPU dari uniform posisi pointer dan slot riak (maks. 3), tanpa simulasi.
  * - Drag mouse di area kosong saat bentuk tampil memutar bentuk (trackball di sumbu layar,
  *   dengan inersia). Rotasi digabung ke uniform uShapeRot; tanpa alokasi per frame.
- * - Posisi bentuk di dunia dihitung dari proyeksi pose kamera zoom-in (unproject titik
- *   layar sasaran), jadi bentuk mendarat di sisi viewport yang benar untuk rasio apa pun.
+ * - Kesan kedalaman dan streak dihitung di shader. Engine hanya memberi matriks view-proyeksi
+ *   frame sebelumnya (kecepatan layar tiap titik) dan pulsa FOV dari kecepatan zoom.
  * - Posisi bentuk tujuan (aTarget) di-upload ulang hanya saat ganti bentuk, dan hanya
  *   ketika bentuk lama sudah lepas penuh (I = 0).
  * - Tanpa alokasi per frame. Semua parameter dari src/config/pointfield.ts; setParams()
@@ -49,9 +55,9 @@ import {
   POINTER,
   POINTFIELD_DEFAULTS,
   SETTLE,
-  WIDE_QUERY,
+  ZOOM_FX,
   type PointFieldParams,
-  type ShapeSide,
+  type ZoomDirection,
 } from '@/config/pointfield'
 import { buildPointData, SHAPE_BASE_RADIUS, type PointData } from './geometry'
 import { computeFrame, createFrameState, lerp, phaseBounds, scrollTarget, type SeqItem } from './scrollmap'
@@ -74,12 +80,12 @@ export interface PointFieldDebug {
   morph: number
   /** Bentuk yang sedang dimuat di aTarget (-1 = belum ada). */
   shape: number
-  /** Pusat bentuk di layar (NDC -1..1, x ke kanan, y ke atas) dari kamera saat ini. */
+  /** Pusat bentuk di layar (NDC -1..1, x ke kanan, y ke atas) dari kamera saat ini; ≈ (0, 0) pada puncak zoom. */
   shapeNdc: [number, number]
   count: number
   device: DeviceKind
-  /** Layar ≥ 1024px (ukuran bentuk dari tinggi viewport) atau sempit. */
-  wide: boolean
+  /** FOV kamera saat ini (derajat), termasuk pulsa zoom. */
+  fov: number
   /** Keaktifan pointer 0..1 (parallax + medan dorong) dan jumlah riak aktif. */
   pointer: number
   ripples: number
@@ -100,6 +106,8 @@ export interface PointFieldEngine {
   /** Terapkan parameter baru. Geometri dibangun ulang bila parameter geometri berubah. */
   setParams(next: PointFieldParams): void
   getParams(): PointFieldParams
+  /** Proyeksi titik dunia dengan kamera saat ini: [NDC x, NDC y, kedalaman] (untuk pengujian arah aliran). */
+  project(x: number, y: number, z: number): [number, number, number]
   debug(): PointFieldDebug
   destroy(): void
 }
@@ -129,8 +137,8 @@ const SCROLL_IDLE_MS = 150
 const NAV_MAX_MS = 2500
 /** Durasi transisi warna titik saat tema berganti. */
 const COLOR_FADE_MS = 200
-/** Intensitas di bawah ini dianggap lepas penuh (boleh ganti bentuk). */
-const RELEASED = 0.001
+/** Intensitas di bawah ini dianggap lepas (boleh ganti bentuk): morph ≈ 0, tak terlihat. */
+const RELEASED = 0.03
 
 /** Cek dukungan WebGL2 tanpa membiarkan three.js mencetak error ke console. */
 function supportsWebGL(): boolean {
@@ -169,12 +177,12 @@ function countFor(device: DeviceKind, params: PointFieldParams): number {
   return Math.max(16, Math.round(raw))
 }
 
-/** Arah sisi: x = -1 kiri / 1 kanan, y = 1 atas / -1 bawah. */
-function sideX(side: ShapeSide): number {
-  return side.endsWith('left') ? -1 : side.endsWith('right') ? 1 : 0
+/** Arah zoom di sumbu layar: x = -1 kiri / 1 kanan, y = 1 atas / -1 bawah. */
+function zoomX(direction: ZoomDirection): number {
+  return direction.endsWith('left') ? -1 : direction.endsWith('right') ? 1 : 0
 }
-function sideY(side: ShapeSide): number {
-  return side.startsWith('top') ? 1 : side.startsWith('bottom') ? -1 : 0
+function zoomY(direction: ZoomDirection): number {
+  return direction.startsWith('top') ? 1 : direction.startsWith('bottom') ? -1 : 0
 }
 
 /** Mengembalikan null bila WebGL tidak tersedia atau renderer gagal dibuat. */
@@ -224,6 +232,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     next.setAttribute('aSelect', new BufferAttribute(data.select, 1))
     next.setAttribute('aSpin', new BufferAttribute(data.spin, 1))
     next.setAttribute('aPhase', new BufferAttribute(data.phase, 1))
+    next.setAttribute('aSeed', new BufferAttribute(data.seed, 1))
     return next
   }
   geometry = buildGeometry()
@@ -261,6 +270,18 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     uRippleStrength: { value: params.rippleStrength },
     uRippleWidth: { value: params.rippleWidth },
     uRippleDamping: { value: params.rippleDamping },
+    uDepthSize: { value: params.depthSize },
+    uDepthOpacity: { value: params.depthOpacity },
+    uDepthRange: { value: params.depthRange },
+    uNearFade: { value: params.nearFade },
+    uSizeVar: { value: params.sizeVariation },
+    uBrightVar: { value: params.brightnessVariation },
+    // View-proyeksi frame sebelumnya → kecepatan layar tiap titik (streak).
+    uPrevViewProj: { value: new Matrix4() },
+    uResolution: { value: new Vector2(1, 1) },
+    uFrameScale: { value: 1 },
+    uStreak: { value: params.streakStrength },
+    uStreakMax: { value: ZOOM_FX.streakMax },
     uOpacity: { value: params.pointOpacity },
     uColor1: { value: colors[0] },
     uColor2: { value: colors[1] },
@@ -278,8 +299,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   const scene = new Scene()
   scene.add(points)
   const camera = new PerspectiveCamera(FOV.wide, 1, 0.1, 120)
-  /** Kamera bantu (tidak dirender) untuk menghitung posisi bentuk dari pose zoom-in. */
-  const poseCamera = new PerspectiveCamera(FOV.wide, 1, 0.1, 120)
 
   // Objek kerja (dipakai ulang, tanpa alokasi per frame).
   const worldUp = new Vector3(0, 1, 0)
@@ -287,9 +306,17 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   const vForward = new Vector3()
   const vRight = new Vector3()
   const vUp = new Vector3()
-  const vSide = new Vector3()
+  /** Arah zoom (dunia, satuan), titik fokus = pusat bentuk, dan titik-titik jalur kamera. */
+  const vZoomDir = new Vector3()
+  const vFocus = new Vector3()
+  const vNeutral = new Vector3()
+  const vPeak = new Vector3()
+  const vControl = new Vector3()
+  const vDelta = new Vector3()
+  const vLat = new Vector3()
   const vLook = new Vector3()
-  const vDir = new Vector3()
+  /** View-proyeksi frame sebelumnya (uniform uPrevViewProj). */
+  const prevViewProj = uniforms.uPrevViewProj.value
   const euler = new Euler()
   const matrix = new Matrix4()
   const dragMatrix = new Matrix4()
@@ -313,16 +340,19 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
 
   const state = createFrameState(params)
   let reduce = matches(REDUCED_MOTION)
-  let wide = matches(WIDE_QUERY)
   let T = 0
   /** Detik animasi (revolusi, rotasi bentuk). Maju hanya saat loop jalan; dt dibatasi. */
   let time = 0
   /** Intensitas bentuk yang ditampilkan (morph + zoom), mengejar intensitas dari scroll. */
   let intensity = 0
-  /** Arah sisi bentuk saat ini untuk kamera (dihitung bersama posisi bentuk). */
-  let sideDirX = 0
-  let sideDirY = 0
   let anchorDirty = true
+  /** FOV dasar (menurut lebar layar) dan tambahan pulsa zoom (derajat), dihaluskan. */
+  let baseFov: number = FOV.wide
+  let fovKick = 0
+  /** Intensitas frame sebelumnya (kecepatan zoom). */
+  let prevIntensity = 0
+  /** true = frame ini tanpa streak (loop baru mulai, lompatan, resize). */
+  let resetPrev = true
   let raf = 0
   let destroyed = false
   let contextLost = false
@@ -404,19 +434,16 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     uniforms.uRippleStrength.value = params.rippleStrength
     uniforms.uRippleWidth.value = Math.max(0.001, params.rippleWidth)
     uniforms.uRippleDamping.value = Math.max(0.01, params.rippleDamping)
+    uniforms.uDepthSize.value = params.depthSize
+    uniforms.uDepthOpacity.value = params.depthOpacity
+    uniforms.uDepthRange.value = Math.max(1, params.depthRange)
+    uniforms.uNearFade.value = Math.max(0.2, params.nearFade)
+    uniforms.uSizeVar.value = params.sizeVariation
+    uniforms.uBrightVar.value = params.brightnessVariation
     euler.set(params.revolutionTiltX, 0, params.revolutionTiltZ, 'XYZ')
     uniforms.uRevTilt.value.setFromMatrix4(matrix.makeRotationFromEuler(euler))
   }
   applyParamUniforms()
-
-  /** Sisi bentuk di DOM (data-shape-side di section 2..8), dipakai CSS untuk menggeser konten. */
-  function syncSideAttributes(): void {
-    for (const item of seq) {
-      if (item.kind !== 'section' || item.index < 1) continue
-      const side = params.sides[item.index - 1]
-      if (side && item.el.dataset.shapeSide !== side) item.el.dataset.shapeSide = side
-    }
-  }
 
   /** Baca warna token ke `out`. Bila token kosong, warna sebelumnya dipertahankan. */
   function readColors(out: readonly Color[] = colors): void {
@@ -469,8 +496,11 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     renderer.setPixelRatio(ratio)
     renderer.setSize(w, h, false)
     camera.aspect = w / h
-    camera.fov = w < FOV.narrowBelow ? FOV.narrow : FOV.wide
+    baseFov = w < FOV.narrowBelow ? FOV.narrow : FOV.wide
+    camera.fov = baseFov + fovKick
     camera.updateProjectionMatrix()
+    uniforms.uResolution.value.set(w, h)
+    resetPrev = true
     uniforms.uSize.value = params.pointSize * ratio
     uniforms.uSizeMax.value = MAX_POINT_PX * ratio
     uniforms.uScale.value = h * 0.5
@@ -480,61 +510,77 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     return true
   }
 
-  /**
-   * Pose kamera: orbit netral (yaw/pitch) di jarak cameraFar, menuju cameraNear sesuai
-   * zoom `e` (0..1), sambil bergeser (sideShift) dan menengok (sideLook) ke arah sisi.
-   */
-  function placeCamera(target: PerspectiveCamera, yaw: number, pitch: number, e: number, sx: number, sy: number): void {
+  /** Titik di orbit (yaw, pitch) pada jarak `distance` dari pusat field, ditulis ke `out`. */
+  function orbitPoint(out: Vector3, yaw: number, pitch: number, distance: number): Vector3 {
     const cp = Math.cos(pitch)
-    vOrbit.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp)
-    vForward.copy(vOrbit).negate()
-    vRight.crossVectors(vForward, worldUp).normalize()
-    vUp.crossVectors(vRight, vForward)
-    vSide.copy(vRight).multiplyScalar(sx).addScaledVector(vUp, sy)
-    const distance = lerp(params.cameraFar, params.cameraNear, e)
-    target.position.copy(vOrbit).multiplyScalar(distance).addScaledVector(vSide, params.sideShift * e)
-    vLook.copy(vSide).multiplyScalar(params.sideLook * e)
-    target.up.copy(worldUp)
-    target.lookAt(vLook)
+    return out.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp).multiplyScalar(distance)
   }
 
   /**
-   * Posisi dan ukuran bentuk untuk `shape` (= jeda 0..6). Titik sasaran di layar (NDC)
-   * di-unproject dari pose kamera zoom-in penuh jeda itu pada jarak shapeDepth, sehingga
-   * pusat bentuk berada sideOffsetX dari tepi kiri/kanan atau bandOffsetY dari tepi
-   * atas/bawah (keduanya untuk sudut). Reduced motion: dari pose kamera statis.
+   * Titik fokus zoom (pusat bentuk) dan arah zoom dunia untuk jeda `shape`, plus skala
+   * bentuk. Arah zoom d = kombinasi sumbu layar kanan/atas pada pose netral section
+   * sebelum jeda (yaw/pitch[shape]); fokus C = d × zoomReach dari pusat field. Skala:
+   * tinggi bentuk pada jarak cameraNear = shapeSize × tinggi viewport (dibatasi
+   * shapeMaxWidth × lebar), jadi bentuk menempati ±40–50% layar pada puncak zoom.
+   * Reduced motion: kamera statis, bentuk di tengah layar pada jarak cameraNear di depannya.
    */
   function computeAnchor(shape: number): void {
     anchorDirty = false
     if (shape < 0 || width === 0) return
-    const side = params.sides[shape] ?? 'right'
-    const sx = sideX(side)
-    const sy = sideY(side)
-    const ndcX = sx * (1 - 2 * params.sideOffsetX)
-    const ndcY = sy * (1 - 2 * params.bandOffsetY)
-    // Lebar: kiri/kanan dari tinggi viewport, atas/bawah/sudut lebih kecil. Sempit: dari lebar.
-    const diameterPx = wide
-      ? (sx !== 0 && sy === 0 ? params.shapeSizeWide : params.shapeSizeBand) * height
-      : Math.min(params.shapeSizeNarrow * width, params.shapeSizeBand * height)
-    sideDirX = sx
-    sideDirY = sy
-
-    poseCamera.fov = camera.fov
-    poseCamera.aspect = camera.aspect
-    poseCamera.updateProjectionMatrix()
-    const k = Math.min(shape, params.yaw.length - 1)
-    if (reduce) placeCamera(poseCamera, params.yaw[0], params.pitch[0], 0, 0, 0)
-    else placeCamera(poseCamera, params.yaw[k], params.pitch[k], 1, sx, sy)
-    poseCamera.updateMatrixWorld()
-
-    vDir.set(ndcX, ndcY, 0.5).unproject(poseCamera).sub(poseCamera.position).normalize()
-    poseCamera.getWorldDirection(vForward)
-    const depth = Math.max(0.5, params.shapeDepth)
-    const along = depth / Math.max(0.1, vDir.dot(vForward))
-    uniforms.uShapeCenter.value.copy(poseCamera.position).addScaledVector(vDir, along)
-
-    const worldPerPx = (2 * depth * Math.tan((poseCamera.fov * Math.PI) / 360)) / height
+    const near = Math.max(1, params.cameraNear)
+    if (reduce) {
+      orbitPoint(vOrbit, params.yaw[0], params.pitch[0], 1)
+      uniforms.uShapeCenter.value.copy(vOrbit).multiplyScalar(params.cameraFar - near)
+    } else {
+      const k = Math.min(shape, params.yaw.length - 1)
+      const direction = params.zoomDirections[shape] ?? 'right'
+      // Sumbu layar pada pose netral: kanan = maju × atas, atas = kanan × maju.
+      orbitPoint(vOrbit, params.yaw[k], params.pitch[k], 1)
+      vForward.copy(vOrbit).negate()
+      vRight.crossVectors(vForward, worldUp).normalize()
+      vUp.crossVectors(vRight, vForward)
+      vZoomDir.copy(vRight).multiplyScalar(zoomX(direction)).addScaledVector(vUp, zoomY(direction))
+      if (vZoomDir.lengthSq() > 0) vZoomDir.normalize()
+      vFocus.copy(vZoomDir).multiplyScalar(params.zoomReach)
+      uniforms.uShapeCenter.value.copy(vFocus)
+    }
+    const diameterPx = Math.min(params.shapeSize * height, params.shapeMaxWidth * width)
+    const worldPerPx = (2 * near * Math.tan((baseFov * Math.PI) / 360)) / height
     uniforms.uShapeScale.value = (diameterPx * 0.5 * worldPerPx) / SHAPE_BASE_RADIUS
+  }
+
+  /**
+   * Pose kamera untuk intensitas `e` (0 = netral, 1 = puncak zoom). Netral: orbit
+   * (neutralYaw, neutralPitch) di jarak cameraFar, melihat pusat field. Puncak: orbit
+   * (peakYaw, peakPitch) di jarak cameraNear dari titik fokus C, melihat C. Posisi di
+   * antaranya = Bézier kuadratik netral → kontrol → puncak; titik pandang = e × C.
+   * Titik kontrol memisahkan gerak sepanjang arah zoom (lateral) dari gerak maju:
+   * pathCurve 0 = lurus, 1 = maju dulu lalu menyimpang ke arah zoom (jalur melengkung).
+   */
+  function placeCamera(neutralYaw: number, neutralPitch: number, e: number, peakYaw: number, peakPitch: number): void {
+    orbitPoint(vNeutral, neutralYaw, neutralPitch, params.cameraFar)
+    if (e <= 0.0005 || currentShape < 0) {
+      camera.position.copy(vNeutral)
+      vLook.set(0, 0, 0)
+    } else {
+      orbitPoint(vPeak, peakYaw, peakPitch, Math.max(1, params.cameraNear)).add(vFocus)
+      vDelta.subVectors(vPeak, vNeutral)
+      vLat.copy(vZoomDir).multiplyScalar(vZoomDir.dot(vDelta))
+      vDelta.sub(vLat)
+      const c = Math.min(1, Math.max(0, params.pathCurve))
+      vControl
+        .copy(vNeutral)
+        .addScaledVector(vDelta, lerp(0.5, 0.8, c))
+        .addScaledVector(vLat, lerp(0.5, 0.1, c))
+      const u = 1 - e
+      camera.position.set(0, 0, 0)
+      camera.position.addScaledVector(vNeutral, u * u)
+      camera.position.addScaledVector(vControl, 2 * u * e)
+      camera.position.addScaledVector(vPeak, e * e)
+      vLook.copy(vFocus).multiplyScalar(e)
+    }
+    camera.up.copy(worldUp)
+    camera.lookAt(vLook)
   }
 
   /** Muat bentuk ke aTarget. Hanya dipanggil saat bentuk lama sudah lepas penuh. */
@@ -719,6 +765,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   function renderFrame(now: number): void {
     if (resize()) dirty = true
     // dt dibatasi: loop yang baru mulai / tab yang baru kembali tidak membuat gerak melonjak.
+    if (!lastTime) resetPrev = true
     const dt = lastTime ? Math.min(MAX_DT_MS, Math.max(0, now - lastTime)) : FRAME_MS
     lastTime = now
     const fading = stepColors(now)
@@ -743,8 +790,9 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       uniforms.uPointerActive.value = 0
       for (const ripple of uniforms.uRipples.value) ripple.w = 0
       uniforms.uMorph.value = intensity
+      uniforms.uStreak.value = 0
       updateShapeRotation()
-      placeCamera(camera, params.yaw[0], params.pitch[0], 0, 0, 0)
+      placeCamera(params.yaw[0], params.pitch[0], 0, 0, 0)
       renderer.render(scene, camera)
       if (fading) schedule()
       else lastTime = 0
@@ -757,6 +805,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     if (!navigating) {
       if (Math.abs(target - T) > JUMP_ELEMENTS) {
         T = target
+        resetPrev = true
       } else {
         // Smoothing per frame 60 fps, dikonversi ke dt nyata (konsisten di 30/60/120 Hz).
         T += (target - T) * (1 - (1 - params.smoothing) ** step)
@@ -773,7 +822,9 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     if (state.shape >= 0 && state.shape === currentShape) {
       goal = idle ? (!state.releasing && state.intensity >= 0.5 ? 1 : 0) : state.intensity
     }
-    const rate = idle ? SETTLE.rate : SETTLE.scrollRate
+    // Menukar bentuk (bentuk lain masih termuat) selalu cepat; menyelesaikan scroll yang berhenti pelan.
+    const swapping = state.shape >= 0 && state.shape !== currentShape
+    const rate = idle && !swapping ? SETTLE.rate : SETTLE.scrollRate
     intensity += (goal - intensity) * (1 - (1 - rate) ** step)
     if (Math.abs(goal - intensity) < 0.0005) intensity = goal
     if (state.shape >= 0 && state.shape !== currentShape && intensity < RELEASED) {
@@ -782,21 +833,33 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     }
     if (anchorDirty) computeAnchor(currentShape)
 
-    // Kamera: zoom mengikuti intensitas; drift sangat halus selama fase tahan; parallax pointer.
+    // Kamera: zoom mengikuti intensitas; drift halus selama fase tahan; parallax pointer.
     stepPointer(now, step)
     stepDrag(step)
     updateCursor()
+    // View-proyeksi frame yang baru dirender = "frame sebelumnya" untuk streak.
+    prevViewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
     const e = intensity
     const drift = state.shape === currentShape ? params.holdDrift * (state.hold - 0.5) * e : 0
-    const side = currentShape >= 0 ? 1 : 0
-    placeCamera(
-      camera,
-      state.yaw + drift + parallaxX * params.parallaxStrength,
-      state.pitch + parallaxY * params.parallaxStrength,
-      e,
-      sideDirX * side,
-      sideDirY * side,
-    )
+    const px = parallaxX * params.parallaxStrength
+    const py = parallaxY * params.parallaxStrength
+    const k = Math.min(Math.max(currentShape, 0), params.yaw.length - 1)
+    // Pulsa FOV: melebar saat zoom in, menyempit saat zoom out, sebanding kecepatan zoom.
+    const zoomSpeed = (e - prevIntensity) / Math.max(step, 0.25)
+    prevIntensity = e
+    const kick = Math.max(-1, Math.min(1, zoomSpeed / ZOOM_FX.fovSpeedRef)) * params.fovPulse
+    fovKick += (kick - fovKick) * (1 - (1 - ZOOM_FX.fovSmoothing) ** step)
+    camera.fov = baseFov + fovKick
+    camera.updateProjectionMatrix()
+    uniforms.uTanHalfFov.value = Math.tan((camera.fov * Math.PI) / 360)
+    placeCamera(state.yaw + px, state.pitch + py, e, params.yaw[k] + drift + px, params.pitch[k] + py)
+    if (resetPrev) {
+      camera.updateMatrixWorld()
+      prevViewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+      resetPrev = false
+    }
+    uniforms.uStreak.value = params.streakStrength
+    uniforms.uFrameScale.value = 1 / Math.max(step, 0.25)
 
     uniforms.uTime.value = time
     uniforms.uMorph.value = intensity
@@ -854,6 +917,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     navigating = true
     navIndex = index
     T = index
+    resetPrev = true
     window.clearTimeout(navIdleTimer)
     window.clearTimeout(navMaxTimer)
     // Bila scroll tidak terjadi (sudah di tujuan) → selesai setelah jeda idle.
@@ -904,7 +968,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       old.dispose()
     }
     applyParamUniforms()
-    syncSideAttributes()
     // Paksa mat dihitung ulang dan posisi bentuk diukur ulang dengan parameter baru.
     matOffset = Number.NaN
     anchorDirty = true
@@ -926,13 +989,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   const onMotionChange = () => {
     reduce = motionQuery.matches
     applyMotionMode()
-    schedule()
-  }
-  const wideQuery = window.matchMedia(WIDE_QUERY)
-  const onWideChange = () => {
-    wide = wideQuery.matches
-    anchorDirty = true
-    dirty = true
     schedule()
   }
   const onContextLost = () => {
@@ -1031,7 +1087,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   window.addEventListener('resize', onResize)
   document.addEventListener('visibilitychange', onVisibility)
   motionQuery.addEventListener('change', onMotionChange)
-  wideQuery.addEventListener('change', onWideChange)
   canvas.addEventListener('webglcontextlost', onContextLost)
   window.addEventListener('pointermove', onPointerMove, passive)
   window.addEventListener('pointerdown', onPointerDown, { passive: false })
@@ -1063,7 +1118,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     window.removeEventListener('resize', onResize)
     document.removeEventListener('visibilitychange', onVisibility)
     motionQuery.removeEventListener('change', onMotionChange)
-    wideQuery.removeEventListener('change', onWideChange)
     canvas.removeEventListener('webglcontextlost', onContextLost)
     window.removeEventListener('pointermove', onPointerMove)
     window.removeEventListener('pointerdown', onPointerDown)
@@ -1087,7 +1141,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   // ---- Mulai ----
   readColors()
   measure()
-  syncSideAttributes()
   applyMotionMode()
   schedule()
 
@@ -1100,6 +1153,12 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     },
     setParams,
     getParams: () => params,
+    project(x, y, z) {
+      const v = new Vector3(x, y, z)
+      const depth = -v.clone().applyMatrix4(camera.matrixWorldInverse).z
+      v.project(camera)
+      return [v.x, v.y, depth]
+    },
     debug() {
       const item = seq[state.item]
       const [enter, release] = phaseBounds(params)
@@ -1117,7 +1176,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
         shapeNdc: ((v) => [v.x, v.y] as [number, number])(uniforms.uShapeCenter.value.clone().project(camera)),
         count,
         device,
-        wide,
+        fov: camera.fov,
         pointer: pointerActivity,
         ripples: activeRipples(),
         dragging,

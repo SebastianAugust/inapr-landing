@@ -115,86 +115,124 @@ Konsep:
 - **Saat membaca section:** kamera netral (zoom-out), seluruh titik berupa bintang. Layout halaman
   tidak dipengaruhi animasi.
 - **Bintang selalu bergerak.** Seluruh titik berputar pelan mengelilingi pusat field seperti
-  galaksi, tidak bergantung scroll. Titik dekat pusat sedikit lebih cepat, ada variasi acak per
-  titik, plus gerak halus sinus. Semua dihitung di GPU (`shaders.ts`) dari uniform `uTime` dan
-  atribut per titik.
+  galaksi, tidak bergantung scroll, dan tetap berputar selama zoom. Titik dekat pusat sedikit lebih
+  cepat, ada variasi acak per titik, plus gerak halus sinus. Semua dihitung di GPU (`shaders.ts`)
+  dari uniform `uTime` dan atribut per titik.
 - **Titik bentuk.** Sebagian titik (`shapeShare`, default 55%) dipilih acak tetap (PRNG seeded,
   `GEOMETRY_SEED`). Sisanya selalu bintang.
 - **Di tiap jeda** (`Break`, ruang scroll kosong 70vh / 60svh, tanpa teks):
-  - ZOOM IN 0–35%: kamera mendekat dan menengok ke satu sisi layar, bentuk terbentuk;
-  - TAHAN 35–60%: bentuk utuh, berputar pelan;
-  - LEPAS 60–100%: bentuk kembali menjadi bintang, kamera zoom-out sambil berbelok ke arah
-    pandang section berikutnya.
-
-  Section berikutnya selalu mulai di keadaan netral.
+  - ZOOM IN 0–35%: kamera maju sambil menyimpang ke **arah zoom**, bentuk terbentuk;
+  - TAHAN 35–60%: bentuk utuh di **tengah layar**, berputar pelan;
+  - LEPAS 60–100%: bentuk kembali menjadi bintang, kamera kembali ke pose netral (zoom out
+    membalik jalur zoom in).
 - **Bentuk per jeda 1..7:** kubus, bola, torus, piramid, silinder, oktahedron, heliks.
-- **Sisi default (`sides`):** kiri, kanan, atas, bawah, kanan, kiri, atas. Keempat sudut juga
-  didukung.
-- **Posisi bentuk di layar.** Titik sasaran di layar di-unproject dari pose kamera zoom-in penuh
-  pada jarak `shapeDepth`:
-  - kiri/kanan: pusat 30% dari tepi;
-  - atas/bawah: pusat 32% dari tepi, supaya tetap di dalam area jeda yang kosong.
+- **Arah zoom default (`zoomDirections`):** kiri, kanan, atas, bawah, kiri-atas, kanan-bawah, kanan.
+  Keempat sudut didukung.
 
-  Ukuran bentuk = fraksi viewport (≥ 1024px dari tinggi, di bawahnya dari lebar).
-- **Interaksi pointer di canvas** (listener pasif di `window`; canvas tetap `pointer-events: none`):
-  - parallax: kamera miring maks. ±0.06 rad mengikuti pointer, memudar 2 detik setelah pointer
-    diam;
-  - medan dorong: titik di sekitar kursor terdorong menjauh. Perpindahan stateless, fungsi jarak
-    di ruang layar; titik bentuk hanya 25% supaya bentuk tidak rusak;
-  - riak: klik (mouse) atau tap (sentuh) memancarkan gelombang radial yang meredam, maks. 3
-    bersamaan;
-  - sentuh: dorong selama jari menyentuh (touch events pasif, tidak menghalangi scroll), tanpa
-    parallax;
-  - drag putar (mouse/pen): saat bentuk tampil di jeda, klik tahan lalu geser di area kosong untuk
-    memutar bentuk. Rotasinya gaya trackball di sumbu layar, dengan inersia setelah dilepas.
-    Kursor berubah grab/grabbing. Tidak aktif di atas isi section, tautan, atau tombol, di
-    sentuhan, dan saat reduced motion. Rotasi di-reset saat ganti bentuk.
+### Arah zoom dan jalur kamera
 
-Semua parameter ada di satu file, **`src/config/pointfield.ts`** (`POINTFIELD_DEFAULTS`):
+Arah zoom **bukan** posisi bentuk di layar: bentuk selalu terbentuk di tengah layar. Arah zoom
+menentukan ke mana kamera menyimpang.
+
+1. Dari pose netral section sebelum jeda (yaw/pitch), sumbu layar dihitung: kanan = maju × atas,
+   atas = kanan × maju. Arah zoom `d` = kombinasi sumbu itu (mis. kiri-atas = −kanan + atas,
+   dinormalkan).
+2. Titik fokus (pusat bentuk) `C = d × zoomReach` dari pusat field.
+3. Pose netral: jarak `cameraFar` dari pusat field, melihat pusat. Pose puncak: jarak `cameraNear`
+   dari `C`, melihat `C` (arah pandang sejajar pose netral).
+4. Posisi kamera = kurva Bézier kuadratik netral → titik kontrol → puncak. Titik kontrol
+   memisahkan gerak lateral (searah `d`) dari gerak maju; `pathCurve` 0 = lurus, 1 = maju dulu lalu
+   menyimpang. Titik pandang berpindah dari pusat ke `C` (`e × C`).
+5. Parameter kurva `e` = intensitas zoom (fase jeda dengan easing smoothstep), jadi morph bentuk
+   dan posisi kamera selalu sinkron, dan zoom out otomatis memutar balik jalur.
+
+Akibat di layar: kamera bergeser ke arah `d` sambil maju, sehingga aliran titik berlawanan dengan
+arah zoom (kiri → titik mengalir ke kanan; atas → mengalir ke bawah), titik dekat mengalir lebih
+cepat daripada yang jauh (parallax), dan titik yang dilewati membesar lalu keluar dari tepi layar.
+Arah pandang netral (`yaw`/`pitch`) berputar pelan di dalam section, bukan di jeda.
+
+### Kerapatan dan kesan kedalaman
+
+- **Jumlah titik** (satu draw call): desktop 16000, perangkat lemah 9000, mobile 6000.
+- **Volume tebal:** radius `fieldRadius` 26, kerapatan condong ke pusat (`fieldCoreBias`), jadi
+  banyak lapisan dekat dan jauh di jalur kamera.
+- **Shader** (`shaders.ts`):
+  - ukuran = perspektif × pelemahan jarak (`depthSize`) × variasi acak per titik;
+  - opasitas = `pointOpacity` × pelemahan jarak (`depthOpacity`) × kecerahan acak;
+  - titik lebih dekat dari `nearFade` memudar, jadi tidak muncul/hilang tiba-tiba di bidang near;
+  - sprite bulat lembut, blending normal (terbaca di tema Terang maupun Gelap);
+  - titik bentuk tidak ikut meredup menurut jarak, supaya bentuk terbaca solid.
+- **Pulsa FOV:** melebar saat zoom in dan menyempit saat zoom out sebanding kecepatan zoom
+  (`fovPulse`, maks. ±12°; 0 = mati).
+- **Streak:** sprite memanjang searah gerak titik di layar (selisih proyeksi dengan frame
+  sebelumnya), sebanding panjang geraknya (`streakStrength`; 0 = mati; batas `ZOOM_FX.streakMax`).
+- **Bentuk solid:** ±55% titik membentuk bentuk setinggi `shapeSize` = 45% tinggi viewport.
+
+### Interaksi pointer di canvas
+
+Listener pasif di `window`; canvas tetap `pointer-events: none`:
+
+- parallax: kamera miring maks. ±0.06 rad mengikuti pointer, memudar 2 detik setelah pointer diam;
+- medan dorong: titik di sekitar kursor terdorong menjauh. Perpindahan stateless, fungsi jarak di
+  ruang layar; titik bentuk hanya 25% supaya bentuk tidak rusak;
+- riak: klik (mouse) atau tap (sentuh) memancarkan gelombang radial yang meredam, maks. 3 bersamaan;
+- sentuh: dorong selama jari menyentuh (touch events pasif, tidak menghalangi scroll), tanpa
+  parallax;
+- drag putar (mouse/pen): saat bentuk tampil di jeda, klik tahan lalu geser di area kosong untuk
+  memutar bentuk. Rotasinya gaya trackball di sumbu layar, dengan inersia setelah dilepas. Kursor
+  berubah grab/grabbing. Tidak aktif di atas isi section, tautan, atau tombol, di sentuhan, dan saat
+  reduced motion. Rotasi di-reset saat ganti bentuk.
+
+### Parameter
+
+Semua ada di satu file, **`src/config/pointfield.ts`** (`POINTFIELD_DEFAULTS`):
 
 | Parameter | Default | Arti |
 |---|---|---|
 | `smoothing` | 0.18 | kehalusan skalar scroll T (0..1, besar = lebih responsif) |
-| `countDesktop` / `countLowPower` / `countMobile` | 4200 / 2400 / 2000 | jumlah titik per jenis perangkat |
-| `pointSize`, `pointOpacity` | 0.07, 0.9 | ukuran dan opasitas titik (ukuran dibatasi `MAX_POINT_PX`) |
-| `fieldRadius` | 22 | radius bola field |
+| `countDesktop` / `countLowPower` / `countMobile` | 16000 / 9000 / 6000 | jumlah titik per jenis perangkat |
+| `pointSize`, `pointOpacity` | 0.1, 0.9 | ukuran dan opasitas titik (ukuran dibatasi `MAX_POINT_PX`) |
+| `fieldRadius`, `fieldCoreBias` | 26, 0.7 | radius volume field; bias kerapatan ke pusat (0 = merata) |
 | `shapeShare` | 0.55 | proporsi titik yang menjadi bentuk |
 | `revolutionSpeed` | 0.03 | kecepatan sudut revolusi di tepi field (rad/detik) |
 | `revolutionCoreBoost` | 0.8 | pusat berputar (1 + nilai) × lebih cepat dari tepi |
 | `revolutionVariation` | 0.25 | variasi acak kecepatan per titik (±) |
 | `revolutionTiltX`, `revolutionTiltZ` | 0.35, 0.15 | kemiringan bidang putar (radian) |
 | `wobbleAmplitude`, `wobbleSpeed` | 0.12, 0.6 | gerak halus per titik |
-| `cameraFar` / `cameraNear` | 16 / 7 | jarak kamera dari pusat: netral / zoom-in penuh |
-| `sideShift`, `sideLook` | 1.5, 2 | kamera bergeser dan menengok ke arah sisi saat zoom-in |
+| `cameraFar` / `cameraNear` | 16 / 7 | jarak kamera dari pusat field (netral) / dari bentuk (puncak zoom) |
+| `zoomReach` | 10 | jarak titik fokus dari pusat field menuju arah zoom |
+| `pathCurve` | 0.7 | kelengkungan jalur kamera (0 = lurus, 1 = maju dulu lalu menyimpang) |
 | `holdDrift` | 0.04 | drift yaw kamera selama fase tahan (radian) |
 | `phaseFormEnd`, `phaseHoldEnd` | 0.35, 0.6 | batas fase di jeda: zoom-in/bentuk, tahan, lalu lepas/zoom-out |
-| `shapeDepth` | 10 | jarak bentuk di depan kamera zoom-in |
-| `shapeSizeWide` / `shapeSizeBand` | 0.36 / 0.26 | diameter bentuk kiri/kanan dan atas/bawah/sudut (× tinggi viewport, ≥ 1024px) |
-| `shapeSizeNarrow` | 0.48 | diameter bentuk di layar < 1024px (× lebar, maks. `shapeSizeBand` × tinggi) |
-| `sideOffsetX`, `bandOffsetY` | 0.3, 0.32 | pusat bentuk dari tepi kiri/kanan dan atas/bawah |
+| `shapeSize`, `shapeMaxWidth` | 0.45, 0.8 | tinggi bentuk (× tinggi viewport); batas lebar (× lebar viewport) |
 | `shapeSpin` | 0.18 | rotasi lokal bentuk (rad/detik) |
-| `shapeTiltY`, `shapeTiltX` | 0.7, 0.38 | kemiringan dasar bentuk (radian) |
+| `shapeTiltY`, `shapeTiltX` | 0.7, 0.6 | kemiringan dasar bentuk (radian) |
 | `morphSpeed`, `delaySpread` | 1.5, 0.3 | morph: `w = smoothstep(m·speed − delay·spread)`; selisih ≥ 1 agar morph penuh |
+| `depthSize`, `depthOpacity` | 1, 0.5 | kekuatan beda ukuran / opasitas dekat-jauh |
+| `depthRange`, `nearFade` | 36, 1.6 | jarak "paling jauh" untuk efek itu; jarak fade dekat kamera (satuan dunia) |
+| `sizeVariation`, `brightnessVariation` | 0.45, 0.3 | variasi acak ukuran dan kecerahan per titik |
+| `fovPulse` | 12 | pulsa FOV saat zoom (derajat; 0 = mati) |
+| `streakStrength` | 0.15 | streak sprite (0 = mati) |
 | `parallaxStrength`, `parallaxSmoothing` | 0.06, 0.06 | parallax kamera (radian, kehalusan per frame) |
 | `pushRadius`, `pushStrength` | 0.32, 0.06 | medan dorong: radius dan perpindahan maks. (NDC, tinggi layar = 2) |
 | `pushShapeFactor` | 0.25 | pengali dorong/riak untuk titik bentuk |
 | `rippleSpeed`, `rippleStrength`, `rippleWidth`, `rippleDamping` | 1.4, 0.05, 0.12, 1.6 | riak: kecepatan (NDC/detik), kekuatan, lebar gelombang, redaman (1/detik) |
 | `dragSensitivity`, `dragInertia` | 0.008, 0.93 | drag putar bentuk: radian per px, kecepatan tersisa per frame setelah dilepas |
 | `matParallax` | 0.1 | parallax cutting mat (0 = mati) |
-| `yaw`, `pitch` | 8 entri | arah pandang netral per section |
-| `sides` | 7 entri | sisi bentuk per jeda |
+| `yaw`, `pitch` | 8 entri | arah pandang netral di akhir tiap section (berputar pelan di dalam section) |
+| `zoomDirections` | 7 entri | arah zoom per jeda |
 
 Konstanta yang tidak di-tuning ada di file yang sama:
 
 | Konstanta | Isi |
 |---|---|
 | `BREAK_HEIGHT` | tinggi jeda: 70vh desktop, 60svh mobile |
-| `WIDE_QUERY` | batas 1024px untuk ukuran bentuk |
 | `GEOMETRY_SEED` | seed acak geometri |
-| `MAX_POINT_PX` | batas ukuran titik di layar |
+| `MAX_POINT_PX` | batas ukuran titik di layar (9 px; sprite akhir maks. 3× itu) |
+| `ZOOM_FX` | streak maks. 3×, kehalusan dan kecepatan acuan pulsa FOV |
 | `SETTLE` | bentuk setengah jadi diselesaikan setelah scroll diam 450 ms |
-| `POINTER` | pointer memudar setelah 2 dtk diam, maks. 3 riak, batas tap |
-| `MAX_PIXEL_RATIO`, `FOV`, `COLOR_TOKENS` | batas devicePixelRatio, field of view, token warna titik |
+| `POINTER` | pointer memudar setelah 2 dtk diam, maks. 3 riak, batas tap dan drag |
+| `MAX_PIXEL_RATIO`, `FOV`, `COLOR_TOKENS` | batas devicePixelRatio, field of view dasar, token warna titik |
 
 ### Panel tuning (khusus dev)
 
@@ -202,50 +240,48 @@ Buka dev server dengan **`?tune`**, mis. `http://localhost:5173/?tune`.
 
 - Panel muncul di pojok kanan bawah. Bisa diciutkan dengan tombol atau Esc.
 - Isinya:
-  - slider dan input angka untuk tiap parameter (revolusi, kamera, fase jeda, bentuk, pointer,
-    titik);
-  - tabel per section: yaw/pitch netral dan dropdown sisi bentuk di jeda sesudahnya;
-  - indikator: elemen aktif, T, fase, intensitas m, bentuk yang dimuat, keaktifan pointer,
-    jumlah riak, N, dan mode lebar.
-- Jumlah titik dan radius field membangun ulang geometri dengan jeda 300 ms; parameter lain hanya
-  mengubah uniform.
+  - slider dan input angka untuk tiap parameter (revolusi, kamera/jalur, fase jeda, bentuk,
+    kedalaman dan efek zoom, pointer, titik);
+  - tabel per section: yaw/pitch netral dan dropdown **arah zoom** di jeda sesudahnya;
+  - indikator: elemen aktif, T, fase, intensitas m, bentuk yang dimuat, N, FOV, posisi pusat
+    bentuk di layar (≈ 0, 0 pada puncak), pointer, riak.
+- Jumlah titik, radius field, dan bias pusat membangun ulang geometri dengan jeda 300 ms; parameter
+  lain hanya mengubah uniform.
 - Nilai disimpan sementara di localStorage (`inapr-tune`) supaya tidak hilang saat refresh.
   "Reset" kembali ke default dan menghapus nilai tersimpan.
-- "Salin nilai" menyalin objek `POINTFIELD_DEFAULTS` (termasuk `sides`) siap tempel ke
+- "Salin nilai" menyalin objek `POINTFIELD_DEFAULTS` (termasuk `zoomDirections`) siap tempel ke
   `src/config/pointfield.ts`. Nilai dari panel baru jadi permanen setelah ditempel di file itu.
 - Kode panel ada di `src/dev/` dan dimuat hanya bila `import.meta.env.DEV` dan `?tune`, jadi tidak
   ikut bundel produksi. Panel ditata dengan `src/dev/tune.css` (kelas `tp-*`), bukan Tailwind:
   `global.css` memakai `@source not "../dev"`, jadi CSS produksi tidak berisi kelas panel.
-- Di dev server, `window.__inaprPointField.debug()` memberi T, fase, morph, bentuk, posisi bentuk
-  di layar (NDC), keaktifan pointer, riak, N, versi geometri, dan warna titik. Ini untuk skrip
-  pengujian dan tidak ada di produksi.
+- Di dev server, `window.__inaprPointField` memberi `debug()` (T, fase, morph, bentuk, FOV, posisi
+  bentuk di layar, N, versi geometri, warna) dan `project(x, y, z)` (proyeksi titik dunia). Ini untuk
+  skrip pengujian dan tidak ada di produksi.
 
 Catatan engine:
 
 - Jumlah titik ditentukan sekali saat engine dibuat oleh `pickDevice()` di `engine.ts`:
-  - mobile (lebar < 768px atau sisi terpendek < 600px): 2000, ±1100 di antaranya titik bentuk;
-  - perangkat lemah (≤ 4 core atau ≤ 4 GB RAM): 2400;
-  - selain itu: 4200.
+  - mobile (lebar < 768px atau sisi terpendek < 600px): 6000, ±3300 di antaranya titik bentuk;
+  - perangkat lemah (≤ 4 core atau ≤ 4 GB RAM): 9000;
+  - selain itu: 16000, ±8800 titik bentuk.
 - Loop render berjalan terus selama tab terlihat, karena bintang selalu bergerak. Loop berhenti
   saat tab tersembunyi; dt dibatasi 50 ms. Tidak ada alokasi objek per frame.
-- Intensitas bentuk I menggerakkan morph dan zoom kamera sekaligus. Ganti bentuk hanya terjadi
-  saat bentuk lama sudah lepas penuh (I = 0); `aTarget` di-upload ulang hanya saat itu.
+- Intensitas zoom `e` menggerakkan morph dan posisi kamera sekaligus. Ganti bentuk hanya terjadi
+  saat bentuk lama sudah lepas (e < 0.03, tak terlihat); `aTarget` di-upload ulang hanya saat itu.
 - Penanganan kasus rawan:
   - **Klik tautan `#…` yang jauh** (lebih dari satu elemen): T langsung pindah ke section tujuan
     (netral) dan ditahan sampai scroll native benar-benar dekat tujuan (atau 2,5 detik). Bentuk
     di jeda yang dilewati tidak dimuat.
-  - **Lompatan instan** lebih dari 1,5 elemen: T langsung disamakan, tanpa menyapu bentuk.
-  - **Scroll berhenti di tengah jeda:** setelah 450 ms diam, bentuk diselesaikan:
-    - di fase lepas selalu ke lepas;
-    - di fase masuk ke keadaan terdekat.
-
-    Tidak ada bentuk setengah jadi yang tersangkut.
-  - **Resize/rotasi:** posisi scroll dikembalikan ke progres relatif yang sama; posisi bentuk
+  - **Lompatan instan** lebih dari 1,5 elemen: T langsung disamakan, tanpa menyapu bentuk, dan
+    streak frame itu dimatikan.
+  - **Scroll berhenti di tengah jeda:** setelah 450 ms diam, bentuk diselesaikan: di fase lepas
+    selalu ke lepas; di fase masuk ke keadaan terdekat. Tidak ada bentuk setengah jadi.
+  - **Resize/rotasi:** posisi scroll dikembalikan ke progres relatif yang sama; ukuran bentuk
     dihitung ulang. Tinggi viewport diambil dari `clientHeight`, jadi bar alamat mobile tidak
     menggeser T.
   - **Ganti tema:** warna titik memudar 200 ms tanpa membangun ulang geometri.
-- `prefers-reduced-motion`: tanpa revolusi, tanpa gerak kamera, tanpa interaksi pointer.
-  Bintang statis; di jeda, bentuknya tampil statis di sisinya tanpa transisi.
+- `prefers-reduced-motion`: tanpa revolusi, gerak kamera, streak, pulsa FOV, dan interaksi
+  pointer. Bintang statis; di jeda, bentuknya tampil statis di tengah layar tanpa transisi.
 - three.js baru diunduh setelah event `load` dan saat browser senggang (`PointField.tsx`), di dalam
   error boundary. Bila tanpa WebGL, saat error, atau saat context hilang, canvas disembunyikan dan
   yang tampil hanya latar cutting mat.

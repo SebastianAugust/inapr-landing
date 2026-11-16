@@ -1,8 +1,8 @@
 /**
- * Generator data titik: field bola volume + 7 bentuk (urutan = section 2..8).
+ * Generator data titik: field bola volume tebal + 7 bentuk (urutan = jeda 1..7).
  * Rumus bentuk dari prototipe (landing-prototype.html). Bentuk disimpan dalam koordinat
- * LOKAL (belum diskalakan/dimiringkan); skala, kemiringan, rotasi, dan posisi sisi
- * dihitung di shader dari uniform, jadi mengubahnya tidak membangun ulang geometri.
+ * LOKAL (belum diskalakan/dimiringkan); skala, kemiringan, rotasi, dan posisi (titik fokus
+ * zoom) dihitung di engine/shader dari uniform, jadi mengubahnya tidak membangun ulang geometri.
  *
  * Semua acak memakai PRNG seeded (GEOMETRY_SEED): posisi dan pilihan titik bentuk
  * sama di setiap kunjungan dan konsisten antar frame.
@@ -10,9 +10,9 @@
  */
 import { GEOMETRY_SEED, type PointFieldParams } from '@/config/pointfield'
 
-type GeometryParams = Pick<PointFieldParams, 'fieldRadius'>
+type GeometryParams = Pick<PointFieldParams, 'fieldRadius' | 'fieldCoreBias'>
 
-/** Jumlah bentuk = jumlah section yang punya bentuk (2..8). */
+/** Jumlah bentuk = jumlah jeda (1..7). */
 export const SHAPE_COUNT = 7
 
 /** Radius nominal bentuk lokal (dipakai untuk menskalakan bentuk ke ukuran layar). */
@@ -20,6 +20,8 @@ export const SHAPE_BASE_RADIUS = 1.6
 
 const TAU = Math.PI * 2
 const HELIX_SPAN = 12.566 // 4π, dua putaran
+/** Condong cincin torus (radian, sumbu X lokal) agar lubangnya terbuka ke penonton. */
+const TORUS_LEAN = 0.55
 
 type Vec3 = [number, number, number]
 
@@ -48,6 +50,8 @@ export interface PointData {
   spin: Float32Array
   /** Fase gerak halus per titik di [0, 2π). */
   phase: Float32Array
+  /** Seed acak per titik di [0, 1): variasi ukuran dan kecerahan di shader. */
+  seed: Float32Array
   /** Posisi lokal tiap bentuk. */
   shapes: Float32Array[]
 }
@@ -63,13 +67,17 @@ export function buildPointData(n: number, params: GeometryParams): PointData {
     return out
   }
 
-  const { fieldRadius } = params
+  const { fieldRadius, fieldCoreBias } = params
+  // Eksponen radius: 1/3 = volume merata; lebih besar = lebih padat di pusat (banyak lapisan
+  // titik dekat dan jauh di jalur kamera saat zoom in).
+  const radiusExponent = 1 / 3 + 0.25 * Math.min(1, Math.max(0, fieldCoreBias))
   const field = new Float32Array(n * 3)
   const delay = new Float32Array(n)
   const palette = new Float32Array(n)
   const select = new Float32Array(n)
   const spin = new Float32Array(n)
   const phase = new Float32Array(n)
+  const seed = new Float32Array(n)
   const shapes = Array.from({ length: SHAPE_COUNT }, () => new Float32Array(n * 3))
   const [cube, sphere, torus, pyramid, cylinder, octahedron, helix] = shapes
 
@@ -86,8 +94,8 @@ export function buildPointData(n: number, params: GeometryParams): PointData {
   for (let i = 0; i < n; i++) {
     const k = i * 3
 
-    // Field: bola volume radius fieldRadius (cbrt = kerapatan merata).
-    const fr = fieldRadius * Math.cbrt(random())
+    // Field: bola volume radius fieldRadius, kerapatan condong ke pusat (radiusExponent).
+    const fr = fieldRadius * random() ** radiusExponent
     const fu = random() * 2 - 1
     const fphi = random() * TAU
     const fsq = Math.sqrt(1 - fu * fu)
@@ -98,6 +106,7 @@ export function buildPointData(n: number, params: GeometryParams): PointData {
     select[i] = random()
     spin[i] = random() * 2 - 1
     phase[i] = random() * TAU
+    seed[i] = random()
     // Pola warna prototipe: tiap ke-7 titik-2, tiap ke-3 titik-3, sisanya titik-1.
     palette[i] = i % 7 === 0 ? 1 : i % 3 === 0 ? 2 : 0
 
@@ -129,9 +138,14 @@ export function buildPointData(n: number, params: GeometryParams): PointData {
     const tb = rnd(0, TAU)
     const R = 1.05
     const rr = 0.48
-    torus[k] = (R + rr * Math.cos(tb)) * Math.cos(ta)
-    torus[k + 1] = rr * Math.sin(tb)
-    torus[k + 2] = (R + rr * Math.cos(tb)) * Math.sin(ta)
+    // Cincin simetris terhadap putaran bentuk, jadi dicondongkan di data lokalnya
+    // (TORUS_LEAN) supaya lubangnya terbuka dan terbaca sebagai cincin, bukan kapsul.
+    const tx = (R + rr * Math.cos(tb)) * Math.cos(ta)
+    const ty = rr * Math.sin(tb)
+    const tz = (R + rr * Math.cos(tb)) * Math.sin(ta)
+    torus[k] = tx
+    torus[k + 1] = ty * Math.cos(TORUS_LEAN) - tz * Math.sin(TORUS_LEAN)
+    torus[k + 2] = ty * Math.sin(TORUS_LEAN) + tz * Math.cos(TORUS_LEAN)
 
     // 3 Piramid: 22% di alas, sisanya di 4 sisi segitiga.
     const q = random()
@@ -188,5 +202,5 @@ export function buildPointData(n: number, params: GeometryParams): PointData {
     }
   }
 
-  return { field, delay, palette, select, spin, phase, shapes }
+  return { field, delay, palette, select, spin, phase, seed, shapes }
 }

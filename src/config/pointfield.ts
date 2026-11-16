@@ -1,20 +1,23 @@
 /**
  * Parameter animasi titik 3D: SATU sumber kebenaran.
  *
- * Konsep: field bintang yang terus berputar pelan (revolusi galaksi, dihitung di GPU).
- * Saat membaca section, kamera di posisi netral (zoom-out) dan semua titik berupa bintang.
- * Di tiap jeda (Break) di antara section: ZOOM IN ke satu sisi layar sambil sebagian titik
- * (shapeShare) membentuk satu bentuk → TAHAN singkat → ZOOM OUT dan bentuk lepas kembali
- * menjadi bintang, tepat saat section berikutnya mulai terbaca.
- * Ditambah interaksi pointer di canvas: parallax kamera, medan dorong kursor, riak klik.
+ * Konsep: field bintang tebal yang terus berputar pelan (revolusi galaksi, dihitung di GPU).
+ * Saat membaca section, kamera netral (zoom-out) dan semua titik berupa bintang. Di tiap
+ * jeda (Break) di antara section:
+ *   ZOOM IN → TAHAN → ZOOM OUT.
+ * Zoom in = kamera maju sambil menyimpang menuju satu ARAH ZOOM (kiri/kanan/atas/bawah atau
+ * sudut) dan titik fokusnya berpindah ke sana. Sebagian titik (shapeShare) menyatu menjadi
+ * satu bentuk di titik fokus itu, jadi bentuk SELALU tampak di tengah layar pada puncak zoom.
+ * Ditambah efek kedalaman (ukuran/opasitas menurut jarak, fade dekat kamera, pulsa FOV,
+ * streak) dan interaksi pointer di canvas (parallax, medan dorong, riak, drag putar).
  *
  * Mengubah default: edit POINTFIELD_DEFAULTS di bawah. Untuk mencoba nilai secara
  * langsung, buka dev server dengan `?tune` (panel src/dev/tune.tsx), lalu "Salin nilai"
  * dan tempel ke sini.
  */
 
-/** Sisi layar tempat bentuk muncul. Kombinasi = sudut. */
-export const SHAPE_SIDES = [
+/** Arah zoom: ke mana kamera menyimpang saat zoom in. Kombinasi = sudut. */
+export const ZOOM_DIRECTIONS = [
   'left',
   'right',
   'top',
@@ -25,14 +28,14 @@ export const SHAPE_SIDES = [
   'bottom-right',
 ] as const
 
-export type ShapeSide = (typeof SHAPE_SIDES)[number]
+export type ZoomDirection = (typeof ZOOM_DIRECTIONS)[number]
 
 export interface PointFieldParams {
   /** Faktor lerp skalar scroll T per frame 60 fps (0..1). Besar = lebih responsif. */
   smoothing: number
 
   // ---- Titik ----
-  /** Jumlah titik per jenis perangkat (lihat pickDevice() di engine.ts). */
+  /** Jumlah titik per jenis perangkat (lihat pickDevice() di engine.ts). Satu draw call. */
   countDesktop: number
   /** Perangkat lemah: ≤ 4 core CPU atau ≤ 4 GB RAM (bila browser melaporkannya). */
   countLowPower: number
@@ -41,12 +44,17 @@ export interface PointFieldParams {
   /** Ukuran titik (satuan dunia, mengecil menurut jarak). Dibatasi MAX_POINT_PX. */
   pointSize: number
   pointOpacity: number
-  /** Radius bola field (titik tersebar merata di volume). */
+  /** Radius bola field (titik tersebar di volume tebal). */
   fieldRadius: number
+  /**
+   * Bias kerapatan ke pusat (0..1): 0 = merata di volume, 1 = padat di pusat. Pusat padat
+   * berarti banyak lapisan titik dekat dan jauh di jalur kamera saat zoom in.
+   */
+  fieldCoreBias: number
   /** Proporsi titik yang menjadi titik bentuk (0..1). Sisanya tetap bintang. */
   shapeShare: number
 
-  // ---- Revolusi bintang (GPU, tidak bergantung scroll) ----
+  // ---- Revolusi bintang (GPU, tidak bergantung scroll; tetap jalan selama zoom) ----
   /** Kecepatan sudut dasar di tepi field (rad/detik). */
   revolutionSpeed: number
   /** Tambahan kecepatan di pusat: pusat = (1 + nilai) × dasar, tepi = dasar. */
@@ -60,15 +68,18 @@ export interface PointFieldParams {
   wobbleAmplitude: number
   wobbleSpeed: number
 
-  // ---- Kamera ----
-  /** Jarak kamera dari pusat saat netral (zoom-out, selama membaca section). */
+  // ---- Kamera & jalur zoom ----
+  /** Jarak kamera dari pusat field saat netral (zoom-out, selama membaca section). */
   cameraFar: number
-  /** Jarak kamera dari pusat saat zoom-in penuh di jeda. */
+  /** Jarak kamera ke bentuk saat zoom in penuh. */
   cameraNear: number
-  /** Kamera bergeser ke arah sisi saat zoom-in (satuan dunia). */
-  sideShift: number
-  /** Titik pandang kamera menengok ke arah sisi saat zoom-in (satuan dunia). */
-  sideLook: number
+  /** Jarak pusat bentuk (titik fokus) dari pusat field menuju arah zoom. */
+  zoomReach: number
+  /**
+   * Kelengkungan jalur kamera (0..1): 0 = garis lurus netral → puncak; 1 = maju dulu lalu
+   * menyimpang ke arah zoom. Jalur adalah kurva Bézier kuadratik.
+   */
+  pathCurve: number
   /** Drift kamera selama fase tahan (radian yaw total, dari -½ ke +½). */
   holdDrift: number
 
@@ -78,18 +89,10 @@ export interface PointFieldParams {
   phaseHoldEnd: number
 
   // ---- Bentuk ----
-  /** Jarak bentuk di depan kamera zoom-in (satuan dunia). */
-  shapeDepth: number
-  /** Diameter bentuk kiri/kanan (≥ 1024px), fraksi tinggi viewport. */
-  shapeSizeWide: number
-  /** Diameter bentuk atas/bawah/sudut (≥ 1024px), fraksi tinggi viewport; juga batas tinggi di layar sempit. */
-  shapeSizeBand: number
-  /** Diameter bentuk di layar < 1024px, fraksi lebar viewport. */
-  shapeSizeNarrow: number
-  /** Pusat bentuk kiri/kanan: jarak dari tepi layar, fraksi lebar viewport. */
-  sideOffsetX: number
-  /** Pusat bentuk atas/bawah: jarak dari tepi layar, fraksi tinggi viewport. */
-  bandOffsetY: number
+  /** Tinggi bentuk pada puncak zoom, fraksi tinggi viewport (±0.4–0.5 terbaca solid). */
+  shapeSize: number
+  /** Batas lebar bentuk, fraksi lebar viewport (layar potret). */
+  shapeMaxWidth: number
   /** Rotasi lokal bentuk (rad/detik) dan kemiringan dasarnya (radian). */
   shapeSpin: number
   shapeTiltY: number
@@ -97,6 +100,23 @@ export interface PointFieldParams {
   /** Morph per titik: w = smoothstep(clamp(m * morphSpeed - delay * delaySpread)). morphSpeed - delaySpread ≥ 1. */
   morphSpeed: number
   delaySpread: number
+
+  // ---- Kesan kedalaman (shader) ----
+  /** Kekuatan perbedaan ukuran dekat/jauh (0 = hanya perspektif). */
+  depthSize: number
+  /** Kekuatan perbedaan opasitas dekat/jauh (0 = sama). */
+  depthOpacity: number
+  /** Jarak (satuan dunia) tempat titik dianggap paling jauh untuk efek di atas. */
+  depthRange: number
+  /** Titik lebih dekat dari ini (satuan dunia) memudar, jadi tidak muncul/hilang tiba-tiba di bidang near. */
+  nearFade: number
+  /** Variasi acak ukuran dan kecerahan per titik (±fraksi, 0 = seragam). */
+  sizeVariation: number
+  brightnessVariation: number
+  /** Pulsa FOV saat zoom (derajat; + saat zoom in, − saat zoom out; 0 = mati). */
+  fovPulse: number
+  /** Streak: perpanjangan sprite searah gerak titik di layar (0 = mati; ±per px per frame). */
+  streakStrength: number
 
   // ---- Interaksi pointer (canvas; tanpa efek saat reduced motion) ----
   /** Parallax: kemiringan kamera maks. (radian) mengikuti posisi pointer, dan kehalusannya (0..1 per frame). */
@@ -122,24 +142,25 @@ export interface PointFieldParams {
   /** Parallax latar cutting mat: offset = -scrollY * faktor. 0 = mati. */
   matParallax: number
   /**
-   * Arah pandang netral per section (8 entri, indeks = data-section). Di jeda, arah
-   * pandang berpindah ke section berikut selama fase lepas, jadi tiap zoom-in datang dari
-   * arah lain.
+   * Arah pandang netral di AKHIR tiap section (8 entri, indeks = data-section). Di dalam
+   * section, arah berputar pelan dari nilai section sebelumnya ke nilai ini; di jeda
+   * sesudahnya arah ini tetap, jadi tiap zoom in melihat bagian field yang berbeda.
    */
   yaw: readonly number[]
   pitch: readonly number[]
-  /** Sisi bentuk per jeda (7 entri, indeks = data-break). */
-  sides: readonly ShapeSide[]
+  /** Arah zoom per jeda (7 entri, indeks = data-break). Bentuk: kubus, bola, torus, piramid, silinder, oktahedron, heliks. */
+  zoomDirections: readonly ZoomDirection[]
 }
 
 export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   smoothing: 0.18,
-  countDesktop: 4200,
-  countLowPower: 2400,
-  countMobile: 2000,
-  pointSize: 0.07,
+  countDesktop: 16000,
+  countLowPower: 9000,
+  countMobile: 6000,
+  pointSize: 0.1,
   pointOpacity: 0.9,
-  fieldRadius: 22,
+  fieldRadius: 26,
+  fieldCoreBias: 0.7,
   shapeShare: 0.55,
   revolutionSpeed: 0.03,
   revolutionCoreBoost: 0.8,
@@ -150,22 +171,26 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   wobbleSpeed: 0.6,
   cameraFar: 16,
   cameraNear: 7,
-  sideShift: 1.5,
-  sideLook: 2,
+  zoomReach: 10,
+  pathCurve: 0.7,
   holdDrift: 0.04,
   phaseFormEnd: 0.35,
   phaseHoldEnd: 0.6,
-  shapeDepth: 10,
-  shapeSizeWide: 0.36,
-  shapeSizeBand: 0.26,
-  shapeSizeNarrow: 0.48,
-  sideOffsetX: 0.3,
-  bandOffsetY: 0.32,
+  shapeSize: 0.45,
+  shapeMaxWidth: 0.8,
   shapeSpin: 0.18,
   shapeTiltY: 0.7,
-  shapeTiltX: 0.38,
+  shapeTiltX: 0.6,
   morphSpeed: 1.5,
   delaySpread: 0.3,
+  depthSize: 1,
+  depthOpacity: 0.5,
+  depthRange: 36,
+  nearFade: 1.6,
+  sizeVariation: 0.45,
+  brightnessVariation: 0.3,
+  fovPulse: 12,
+  streakStrength: 0.15,
   parallaxStrength: 0.06,
   parallaxSmoothing: 0.06,
   pushRadius: 0.32,
@@ -178,9 +203,9 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   dragSensitivity: 0.008,
   dragInertia: 0.93,
   matParallax: 0.1,
-  yaw: Object.freeze([0.4, 2.6, 4.7, 0.9, 3.2, 5.4, 1.7, 3.9]),
+  yaw: Object.freeze([0.4, 1.3, 2.2, 3.1, 4.0, 4.9, 5.8, 6.7]),
   pitch: Object.freeze([0.12, -0.22, 0.28, -0.12, 0.2, -0.25, 0.1, -0.15]),
-  sides: Object.freeze(['left', 'right', 'top', 'bottom', 'right', 'left', 'top'] as const),
+  zoomDirections: Object.freeze(['left', 'right', 'top', 'bottom', 'top-left', 'bottom-right', 'right'] as const),
 })
 
 /** Parameter yang mengubah posisi titik → geometri dibangun ulang bila berubah. */
@@ -189,12 +214,10 @@ export const GEOMETRY_KEYS = [
   'countLowPower',
   'countMobile',
   'fieldRadius',
+  'fieldCoreBias',
 ] as const satisfies readonly (keyof PointFieldParams)[]
 
 // ---- Konstanta yang tidak di-tuning ----
-
-/** Batas layar lebar (= breakpoint lg Tailwind, 64rem = 1024px): menentukan ukuran bentuk. */
-export const WIDE_QUERY = '(min-width: 64rem)'
 
 /**
  * Tinggi satu jeda (Break). Mobile = di bawah breakpoint md Tailwind (768px).
@@ -205,8 +228,14 @@ export const BREAK_HEIGHT = { desktop: '70vh', mobile: '60svh' } as const
 /** Seed acak geometri: posisi dan penugasan titik bentuk sama di setiap kunjungan. */
 export const GEOMETRY_SEED = 20170101
 
-/** Batas ukuran titik di layar (px CSS) supaya bintang yang sangat dekat kamera tidak membesar. */
-export const MAX_POINT_PX = 7
+/** Batas ukuran titik di layar (px CSS) supaya titik yang sangat dekat kamera tidak membesar tanpa batas. */
+export const MAX_POINT_PX = 9
+
+/**
+ * Efek zoom: streak maksimum (kelipatan ukuran titik), kehalusan pulsa FOV (faktor per frame
+ * 60 fps), dan kecepatan zoom acuan (perubahan intensitas per frame) untuk pulsa penuh.
+ */
+export const ZOOM_FX = { streakMax: 3, fovSmoothing: 0.12, fovSpeedRef: 0.04 } as const
 
 /**
  * Setelah scroll berhenti selama idleMs, bentuk yang setengah jadi diselesaikan ke
@@ -234,7 +263,7 @@ export const POINTER = {
 /** Batas devicePixelRatio. */
 export const MAX_PIXEL_RATIO = { mobile: 1.5, desktop: 2 } as const
 
-/** Field of view: layar sempit pakai FOV lebih lebar. */
+/** Field of view dasar: layar sempit pakai FOV lebih lebar. */
 export const FOV = { narrow: 70, wide: 55, narrowBelow: 700 } as const
 
 /** Token CSS warna titik (lihat src/styles/tokens.css). */
