@@ -11,8 +11,10 @@
  */
 import { useEffect, useId, useRef, useState } from 'react'
 import {
+  BREAK_HEIGHT,
   GEOMETRY_KEYS,
   POINTFIELD_DEFAULTS,
+  RATE_LIMIT,
   readStats,
   ZOOM_DIRECTIONS,
   type PointFieldParams,
@@ -84,6 +86,22 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
     specs: [
       { key: 'phaseFormEnd', label: 'Akhir zoom in / bentuk', min: 0.05, max: 0.9, step: 0.01 },
       { key: 'phaseHoldEnd', label: 'Akhir tahan', min: 0.06, max: 0.95, step: 0.01 },
+      {
+        key: 'minBreakSeconds',
+        label: 'Durasi minimum satu jeda (anti-skip, detik; 0 = mati)',
+        min: 0,
+        max: 5,
+        step: 0.1,
+        hint: (p) => {
+          const form = p.phaseFormEnd
+          const hold = p.phaseHoldEnd - p.phaseFormEnd
+          const out = 1 - p.phaseHoldEnd
+          const sec = (fraction: number) => (fraction * p.minBreakSeconds).toFixed(2) + 's'
+          return p.minBreakSeconds > 0
+            ? 'zoom in ≥ ' + sec(form) + ' · tahan ≥ ' + sec(hold) + ' · zoom out ≥ ' + sec(out) + ' · section ≥ ' + (p.minBreakSeconds / RATE_LIMIT.sectionFactor).toFixed(2) + 's'
+            : 'tanpa pembatas laju'
+        },
+      },
     ],
   },
   {
@@ -276,10 +294,18 @@ interface Extras {
   colors: ReadColors
   /** Scroll-snap aktif (default). Mati = style inline scroll-snap-type: none di <html>. */
   snap: boolean
+  /** Tinggi jeda: desktop (vh) dan mobile (svh). Diterapkan langsung ke tiap [data-break]. */
+  breakHeight: { desktop: number; mobile: number }
 }
 
+const BREAK_HEIGHT_RANGE = { min: 20, max: 300 }
+
 function sanitizeExtras(raw: unknown, base: ReadColors): Extras {
-  const extras: Extras = { colors: { light: [...base.light], dark: [...base.dark] }, snap: true }
+  const extras: Extras = {
+    colors: { light: [...base.light], dark: [...base.dark] },
+    snap: true,
+    breakHeight: { desktop: BREAK_HEIGHT.desktop, mobile: BREAK_HEIGHT.mobile },
+  }
   if (!raw || typeof raw !== 'object') return extras
   const source = raw as Record<string, unknown>
   const colors = source.readColors as Record<string, unknown> | undefined
@@ -290,6 +316,13 @@ function sanitizeExtras(raw: unknown, base: ReadColors): Extras {
     }
   }
   if (source.snap === false) extras.snap = false
+  const heights = source.breakHeight as Record<string, unknown> | undefined
+  for (const key of ['desktop', 'mobile'] as const) {
+    const value = heights?.[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      extras.breakHeight[key] = Math.min(BREAK_HEIGHT_RANGE.max, Math.max(BREAK_HEIGHT_RANGE.min, value))
+    }
+  }
   return extras
 }
 
@@ -308,6 +341,8 @@ function sameAsDefaults(params: PointFieldParams, extras: Extras, base: ReadColo
   return (
     JSON.stringify(params) === JSON.stringify(defaults()) &&
     extras.snap &&
+    extras.breakHeight.desktop === BREAK_HEIGHT.desktop &&
+    extras.breakHeight.mobile === BREAK_HEIGHT.mobile &&
     JSON.stringify(extras.colors) === JSON.stringify(base)
   )
 }
@@ -315,7 +350,7 @@ function sameAsDefaults(params: PointFieldParams, extras: Extras, base: ReadColo
 function persist(params: PointFieldParams, extras: Extras, base: ReadColors): void {
   try {
     if (sameAsDefaults(params, extras, base)) window.localStorage.removeItem(STORAGE_KEY)
-    else window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...params, readColors: extras.colors, snap: extras.snap }))
+    else window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...params, readColors: extras.colors, snap: extras.snap, breakHeight: extras.breakHeight }))
   } catch {
     // Mode privat / storage diblokir: abaikan, nilai tetap berlaku sampai refresh.
   }
@@ -339,6 +374,14 @@ function applyColorOverrides(colors: ReadColors, base: ReadColors): void {
     document.head.appendChild(el)
   }
   el.textContent = css
+}
+
+/** Tinggi jeda langsung ke tiap [data-break] (inline style menimpa nilai dari Break.tsx). */
+function applyBreakHeight(heights: Extras['breakHeight']): void {
+  for (const el of document.querySelectorAll<HTMLElement>('[data-break]')) {
+    el.style.setProperty('--break-h-desktop', heights.desktop + 'vh')
+    el.style.setProperty('--break-h-mobile', heights.mobile + 'svh')
+  }
 }
 
 /** Saklar scroll-snap untuk pengujian: style inline mengalahkan aturan di global.css. */
@@ -376,6 +419,9 @@ function toSource(params: PointFieldParams, extras: Extras): string {
     ...tokens('light'),
     "/* src/styles/tokens.css: warna baca, tema Gelap (:root[data-theme='dark']) */",
     ...tokens('dark'),
+    '',
+    '// src/config/pointfield.ts (konstanta; di config perlu reload halaman)',
+    'export const BREAK_HEIGHT = { desktop: ' + tidy(extras.breakHeight.desktop) + ', mobile: ' + tidy(extras.breakHeight.mobile) + ' } as const',
     '',
     '// scroll-snap: ' + (extras.snap ? 'aktif' : 'MATI (hanya untuk pengujian; default di global.css tetap y proximity)'),
     '',
@@ -447,6 +493,12 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
     applySnap(extras.snap)
   }, [extras.snap])
 
+  // Tinggi jeda berubah → ukur ulang posisi jeda di engine.
+  useEffect(() => {
+    applyBreakHeight(extras.breakHeight)
+    engine.measure()
+  }, [engine, extras.breakHeight])
+
   useEffect(() => {
     persist(params, extras, base)
   }, [params, extras, base])
@@ -456,6 +508,7 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
       window.clearTimeout(rebuildTimer.current)
       document.getElementById(OVERRIDE_STYLE_ID)?.remove()
       applySnap(true)
+      applyBreakHeight({ desktop: BREAK_HEIGHT.desktop, mobile: BREAK_HEIGHT.mobile })
     },
     [],
   )
@@ -599,6 +652,34 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
             })}
           </fieldset>
         ))}
+
+        <fieldset className="tp-group">
+          <legend className="tp-legend">Tinggi jeda</legend>
+          <p className="tp-note">
+            Diterapkan langsung (inline di tiap jeda) dan tersimpan di panel; nilai di config (BREAK_HEIGHT) baru berlaku
+            setelah menempel dan reload halaman. Lebih tinggi dari viewport = jeda tak terlewat satu layar.
+          </p>
+          {(['desktop', 'mobile'] as const).map((key) => (
+            <div key={key} className="tp-row">
+              <label htmlFor={uid + '-bh-' + key}>{key === 'desktop' ? 'Desktop (vh, ≥ 768px)' : 'Mobile (svh, < 768px)'}</label>
+              <input
+                id={uid + '-bh-' + key}
+                type="number"
+                min={BREAK_HEIGHT_RANGE.min}
+                max={BREAK_HEIGHT_RANGE.max}
+                step={5}
+                value={extras.breakHeight[key]}
+                onChange={(event) => {
+                  const value = event.target.valueAsNumber
+                  if (Number.isFinite(value)) {
+                    setExtras((current) => ({ ...current, breakHeight: { ...current.breakHeight, [key]: Math.min(BREAK_HEIGHT_RANGE.max, Math.max(BREAK_HEIGHT_RANGE.min, value)) } }))
+                  }
+                }}
+                className="tp-num"
+              />
+            </div>
+          ))}
+        </fieldset>
 
         <fieldset className="tp-group">
           <legend className="tp-legend">Warna baca per tema &amp; snap</legend>

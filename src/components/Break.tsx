@@ -9,12 +9,12 @@ interface BreakProps {
 
 /** Tinggi jeda dari config (BREAK_HEIGHT), dibaca kelas tinggi di className di bawah. */
 const heightVars = {
-  '--break-h-mobile': BREAK_HEIGHT.mobile,
-  '--break-h-desktop': BREAK_HEIGHT.desktop,
+  '--break-h-mobile': `${BREAK_HEIGHT.mobile}svh`,
+  '--break-h-desktop': `${BREAK_HEIGHT.desktop}vh`,
 } as CSSProperties
 
 /**
- * Jeda (celah) di antara section: hanya ruang scroll pendek, tanpa teks. Di sini engine
+ * Jeda (celah) di antara section: hanya ruang scroll (±1 layar), tanpa teks. Di sini engine
  * titik 3D melakukan zoom-in ke satu sisi layar, membentuk satu bentuk, lalu zoom-out.
  * Tinggi dari BREAK_HEIGHT (src/config/pointfield.ts); breakpoint md (768px) = batas
  * mobile/desktop.
@@ -22,6 +22,8 @@ const heightVars = {
  * Kontrak dengan engine titik (src/pointfield/engine.ts):
  * - data-break={index} dan data-shape={nama bentuk}.
  * - Urutan scroll = urutan DOM dari [data-section] dan [data-break].
+ * - Tanpa titik scroll-snap (lihat komentar di global.css): snap tengah-jeda menjebak scroll roda
+ *   mouse di pusat jeda.
  */
 export function Break({ index }: BreakProps) {
   return (

@@ -7,6 +7,12 @@
  *   intensitas bentuk I. Section selalu netral (I = 0, hanya bintang); di tiap jeda:
  *   ZOOM IN + bentuk terbentuk → TAHAN → LEPAS + ZOOM OUT. I menggerakkan morph titik
  *   bentuk DAN posisi kamera pada jalurnya, jadi keduanya selalu sinkron.
+ * - Anti-skip: laju T dibatasi (params.minBreakSeconds): satu jeda penuh tidak bisa dilewati lebih
+ *   cepat dari durasi minimum. Flick melewati jeda → T mengejar posisi scroll dengan laju
+ *   terbatas, jadi zoom in → tahan → zoom out tetap berurutan lalu berhenti sesuai posisi akhir
+ *   (SETTLE tetap berlaku setelah T sampai). Lompatan instan (perubahan scroll > JUMP_ELEMENTS
+ *   dalam satu frame: End/Home, tarik scrollbar) atau tertinggal > RATE_LIMIT.lagJump langsung
+ *   disamakan; klik anchor jauh tetap lewat mode navigasi (onClick).
  * - ARAH ZOOM (kiri/kanan/atas/bawah/sudut) per jeda bukan posisi bentuk di layar, melainkan
  *   ke mana kamera menyimpang: titik fokus C = arah zoom × zoomReach dari pusat field.
  *   Kamera bergerak di kurva Bézier kuadratik dari pose netral (jarak cameraFar, melihat
@@ -58,6 +64,7 @@ import {
   MAX_POINT_PX,
   POINTER,
   POINTFIELD_DEFAULTS,
+  RATE_LIMIT,
   READ_COLOR_TOKENS,
   readStats,
   SAFE_ZONE,
@@ -144,9 +151,10 @@ const FRAME_MS = 1000 / 60
 /** Batas dt per frame: setelah tab kembali / jank, waktu dan T tidak melonjak. */
 const MAX_DT_MS = 50
 /**
- * Bila T tertinggal lebih dari ini (dalam jumlah elemen) dari posisi scroll (mis. tombol
- * End, resize besar, lompatan instan), T langsung disamakan: tidak memutar melewati
- * banyak bentuk dalam sekejap.
+ * Bila posisi scroll (target) berubah lebih dari ini (dalam jumlah elemen) dalam SATU frame
+ * (mis. tombol End, tarik scrollbar, scrollTo instan, resize besar), T langsung disamakan:
+ * tidak memutar melewati banyak bentuk dalam sekejap. Scroll yang menempuh jarak sama dalam
+ * banyak frame (flick) tidak termasuk: T mengejar dengan laju terbatas (minBreakSeconds).
  */
 const JUMP_ELEMENTS = 1.5
 /** Scroll dianggap selesai bila tidak ada event scroll selama ini (fallback scrollend). */
@@ -856,6 +864,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     lastTime = now
     const fading = stepColors(now)
     const target = scrollTarget(tops, heights, seq.length)
+    const previousTarget = lastTarget
     lastTarget = target
 
     if (reduce) {
@@ -890,12 +899,22 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     const step = dt / FRAME_MS
     // Selama navigasi anchor jauh, T ditahan di elemen tujuan (lihat onClick).
     if (!navigating) {
-      if (Math.abs(target - T) > JUMP_ELEMENTS) {
+      const instantJump = previousTarget >= 0 && Math.abs(target - previousTarget) > JUMP_ELEMENTS
+      if (instantJump || Math.abs(target - T) > RATE_LIMIT.lagJump) {
         T = target
         resetPrev = true
       } else {
         // Smoothing per frame 60 fps, dikonversi ke dt nyata (konsisten di 30/60/120 Hz).
-        T += (target - T) * (1 - (1 - params.smoothing) ** step)
+        let next = T + (target - T) * (1 - (1 - params.smoothing) ** step)
+        // Pembatas laju (anti-skip): di jeda T naik maks. 1 / minBreakSeconds per detik; di
+        // section boleh sectionFactor kali lebih cepat. Dua arah (scroll naik juga dibatasi).
+        if (params.minBreakSeconds > 0) {
+          const at = seq[Math.min(seq.length - 1, Math.max(0, Math.floor(T)))]
+          const perSecond = (at?.kind === 'break' ? 1 : RATE_LIMIT.sectionFactor) / params.minBreakSeconds
+          const maxStep = (perSecond * dt) / 1000
+          next = T + Math.min(maxStep, Math.max(-maxStep, next - T))
+        }
+        T = next
         if (Math.abs(target - T) < SETTLE_EPSILON) T = target
       }
     }

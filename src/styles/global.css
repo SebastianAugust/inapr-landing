@@ -220,16 +220,11 @@ html.pf-grabbing * {
     scroll-margin-top: calc(var(--banner-h) - 1rem);
   }
   /*
-   * Jeda (Break): pusat jeda = pusat viewport sebenarnya (saat bentuk tertahan; T membaca
-   * titik tengah viewport). Snapport dikurangi scroll-padding-top, jadi pusatnya turun
-   * setengah padding; scroll-margin-bottom sebesar padding menggeser pusat area snap
-   * kembali ke pusat viewport.
+   * Jeda (Break): SENGAJA tanpa titik snap. Diuji di Chromium (roda mouse 100px/notch): titik
+   * snap tengah-jeda (juga saat jeda masih 70vh) menjebak scroll di pusat jeda, karena notch yang
+   * berakhir dalam jarak ±0,3 viewport dari titik snap ditarik balik ke titik itu. Anti-skip
+   * animasi jeda ditangani engine (minBreakSeconds), bukan snap.
    */
-  [data-break] {
-    scroll-snap-align: center;
-    scroll-snap-stop: normal;
-    scroll-margin-bottom: calc(var(--nav-h) + 1rem);
-  }
 
   @media (prefers-reduced-motion: reduce) {
     html {

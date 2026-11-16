@@ -33,6 +33,13 @@ export type ZoomDirection = (typeof ZOOM_DIRECTIONS)[number]
 export interface PointFieldParams {
   /** Faktor lerp skalar scroll T per frame 60 fps (0..1). Besar = lebih responsif. */
   smoothing: number
+  /**
+   * Pembatas laju T (anti-skip): satu jeda penuh (T naik 1) TIDAK bisa dilewati lebih cepat dari
+   * ini (detik), seberapa pun cepat scroll-nya. Flick yang melompati jeda tetap memutar zoom in →
+   * tahan → zoom out berurutan, mengejar posisi scroll dengan laju terbatas. Di section laju
+   * boleh RATE_LIMIT.sectionFactor kali lebih cepat. 0 = tanpa pembatas.
+   */
+  minBreakSeconds: number
 
   // ---- Titik ----
   /** Jumlah titik per jenis perangkat (lihat pickDevice() di engine.ts). Satu draw call. */
@@ -180,10 +187,11 @@ export interface PointFieldParams {
 }
 
 export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
-  smoothing: 0.18,
-  countDesktop: 16000,
-  countLowPower: 9000,
-  countMobile: 6000,
+  smoothing: 0.1,
+  minBreakSeconds: 1.6,
+  countDesktop: 20000,
+  countLowPower: 11000,
+  countMobile: 7500,
   pointSize: 0.1,
   pointOpacity: 0.9,
   fieldRadius: 26,
@@ -201,8 +209,8 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   zoomReach: 10,
   pathCurve: 0.7,
   holdDrift: 0.04,
-  phaseFormEnd: 0.35,
-  phaseHoldEnd: 0.6,
+  phaseFormEnd: 0.38,
+  phaseHoldEnd: 0.68,
   shapeSize: 0.45,
   shapeMaxWidth: 0.8,
   shapeSpin: 0.18,
@@ -252,10 +260,18 @@ export const GEOMETRY_KEYS = [
 // ---- Konstanta yang tidak di-tuning ----
 
 /**
- * Tinggi satu jeda (Break). Mobile = di bawah breakpoint md Tailwind (768px).
- * svh di mobile: stabil saat bar alamat muncul/menyusut.
+ * Tinggi satu jeda (Break): desktop dalam vh, mobile dalam svh (di bawah breakpoint md Tailwind,
+ * 768px; svh stabil saat bar alamat muncul/menyusut). Lebih tinggi dari viewport = jeda tidak
+ * bisa terlewat dalam satu layar scroll.
  */
-export const BREAK_HEIGHT = { desktop: '70vh', mobile: '60svh' } as const
+export const BREAK_HEIGHT = { desktop: 115, mobile: 95 } as const
+
+/**
+ * Pembatas laju T (lihat minBreakSeconds): di section (netral, hanya kamera berputar pelan) T
+ * boleh bergerak sectionFactor kali lebih cepat dari di jeda. LAG_JUMP = bila T tertinggal lebih
+ * dari ini (elemen) dari scroll, T langsung disamakan (End/Home jauh), bukan mengejar.
+ */
+export const RATE_LIMIT = { sectionFactor: 4, lagJump: 4 } as const
 
 /** Seed acak geometri: posisi dan penugasan titik bentuk sama di setiap kunjungan. */
 export const GEOMETRY_SEED = 20170101
