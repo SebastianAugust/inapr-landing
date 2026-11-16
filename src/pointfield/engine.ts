@@ -59,6 +59,7 @@ import {
   POINTER,
   POINTFIELD_DEFAULTS,
   READ_COLOR_TOKENS,
+  readStats,
   SAFE_ZONE,
   SETTLE,
   ZOOM_FX,
@@ -104,8 +105,11 @@ export interface PointFieldDebug {
   colors: string[]
   /** Warna baca saat ini (hex). */
   readColors: string[]
-  /** Intensitas keterbacaan saat ini: I = lerp(readIntensity, 1, uPeak). */
-  readI: number
+  /**
+   * Opasitas efektif rata-rata saat ini di area tanpa teks: dari target baca (desktop:
+   * readIntensity, tanpa zona aman: readIntensityMobile) ke rata-rata penuh di puncak jeda.
+   */
+  effective: number
   /** Puncak jeda ter-ease (0 = membaca, 1 = puncak). */
   peak: number
   /** Zona aman: aktif/tidak dan rect kolom konten (px layar). */
@@ -308,6 +312,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     uReadColor3: { value: colors[5] },
     uPeak: { value: 0 },
     uReadI: { value: params.readIntensity },
+    uReadGain: { value: 1 },
     uReadSize: { value: params.readSize },
     uReadMax: { value: params.readMaxPx },
     uSafeX: { value: new Vector2(0, 0) },
@@ -468,10 +473,10 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     uniforms.uNearFade.value = Math.max(0.2, params.nearFade)
     uniforms.uSizeVar.value = params.sizeVariation
     uniforms.uBrightVar.value = params.brightnessVariation
-    uniforms.uReadI.value = Math.min(1, Math.max(0, params.readIntensity))
     uniforms.uReadSize.value = Math.max(0, params.readSize)
     uniforms.uReadMax.value = Math.max(0.5, params.readMaxPx) * (pixelRatio || 1)
     uniforms.uSafeFactor.value = Math.min(1, Math.max(0, params.safeZoneFactor))
+    applyReadTarget()
     euler.set(params.revolutionTiltX, 0, params.revolutionTiltZ, 'XYZ')
     uniforms.uRevTilt.value.setFromMatrix4(matrix.makeRotationFromEuler(euler))
   }
@@ -526,11 +531,28 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     applySafeZone()
   }
 
+  /**
+   * Opasitas efektif target saat membaca: readIntensity di desktop (zona aman aktif),
+   * readIntensityMobile di layar tanpa zona aman. gain = target / rata-rata opasitas puncak
+   * titik (readStats), supaya nilai config = hasil terlihat.
+   */
+  function readTarget(): number {
+    const target = uniforms.uSafeOn.value > 0 ? params.readIntensity : params.readIntensityMobile
+    return Math.min(1, Math.max(0, target))
+  }
+
+  function applyReadTarget(): void {
+    const target = readTarget()
+    uniforms.uReadI.value = target
+    uniforms.uReadGain.value = target / readStats(params).mean
+  }
+
   /** Px layar → NDC x untuk shader. Mati di bawah SAFE_ZONE.minWidth (mobile) atau tanpa kolom. */
   function applySafeZone(): void {
     const w = width || host.clientWidth
     const on = w >= SAFE_ZONE.minWidth && safeRight > safeLeft
     uniforms.uSafeOn.value = on ? 1 : 0
+    applyReadTarget()
     if (!w) return
     uniforms.uSafeX.value.set((safeLeft / w) * 2 - 1, (safeRight / w) * 2 - 1)
     uniforms.uSafeFeather.value = (SAFE_ZONE.feather / w) * 2
@@ -1250,7 +1272,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
         geometryVersion,
         colors: colors.slice(0, 3).map((color) => color.getHexString()),
         readColors: colors.slice(3).map((color) => color.getHexString()),
-        readI: uniforms.uReadI.value + (1 - uniforms.uReadI.value) * uniforms.uPeak.value,
+        effective: readTarget() + (readStats(params).mean - readTarget()) * uniforms.uPeak.value,
         peak: uniforms.uPeak.value,
         safeZone: { on: uniforms.uSafeOn.value > 0, left: safeLeft, right: safeRight },
       }

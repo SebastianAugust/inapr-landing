@@ -142,22 +142,32 @@ export interface PointFieldParams {
   /** Parallax latar cutting mat: offset = -scrollY * faktor. 0 = mati. */
   matParallax: number
 
-  // ---- Keterbacaan teks (shader; titik diredam saat membaca, penuh di puncak jeda) ----
-  /**
-   * Intensitas titik saat MEMBACA (di dalam section): opasitas titik dikali nilai ini. Menuju
-   * puncak jeda naik ke 1 mengikuti intensitas jeda m: I = lerp(readIntensity, 1, smoothstep(m)).
-   * Dicek WCAG lewat `node scripts/check-reading-contrast.mjs` (warna baca ada di tokens.css).
+  // ---- Keterbacaan teks (shader; titik lebih tenang saat membaca, penuh di puncak jeda) ----
+  /*
+   * Semua opasitas di bawah adalah OPASITAS EFEKTIF: rata-rata opasitas puncak per titik yang
+   * terlihat setelah SEMUA pengali (pointOpacity, kedalaman, variasi kecerahan). Shader
+   * menormalkan faktor kedalaman dan kecerahan dengan rata-rata teoretisnya (lihat
+   * readStats()), jadi nilai yang diketik mendekati hasil yang terlihat. Titik tunggal bisa
+   * sampai ±1,5× rata-rata (titik dekat dan cerah). Menuju puncak jeda semuanya naik ke
+   * perilaku penuh: gain = lerp(gain_baca, 1, smoothstep(m)).
    */
+  /** Opasitas efektif rata-rata di area TANPA teks (tepi layar desktop). Target ≈ 0,55. */
   readIntensity: number
-  /** Pengali ukuran titik saat membaca (1 di puncak jeda). */
+  /**
+   * Opasitas efektif rata-rata di layar tanpa zona aman (lebar < SAFE_ZONE.minWidth: mobile dan
+   * tablet sempit), tempat teks memenuhi lebar. Target ≈ 0,40.
+   */
+  readIntensityMobile: number
+  /**
+   * Zona aman (desktop ≥ SAFE_ZONE.minWidth): pengali RELATIF terhadap area tanpa teks untuk
+   * titik yang di layar berada di kolom konten. Tengah kolom = readIntensity × safeZoneFactor
+   * (0,55 × 0,68 ≈ 0,37). 1 = mati. Melemah ke 1 menuju puncak jeda.
+   */
+  safeZoneFactor: number
+  /** Pengali ukuran titik saat membaca (1 = ukuran normal; 1 di puncak jeda). */
   readSize: number
   /** Ukuran piksel CSS maksimum per titik saat membaca; melonggar ke MAX_POINT_PX di puncak jeda. */
   readMaxPx: number
-  /**
-   * Zona aman (desktop ≥ SAFE_ZONE.minWidth): pengali opasitas tambahan untuk titik yang
-   * secara layar berada di dalam kolom konten (1 = mati). Melemah ke 1 menuju puncak jeda.
-   */
-  safeZoneFactor: number
   /**
    * Arah pandang netral di AKHIR tiap section (8 entri, indeks = data-section). Di dalam
    * section, arah berputar pelan dari nilai section sebelumnya ke nilai ini; di jeda
@@ -220,10 +230,11 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   dragSensitivity: 0.008,
   dragInertia: 0.93,
   matParallax: 0.1,
-  readIntensity: 0.4,
-  readSize: 0.75,
-  readMaxPx: 4,
-  safeZoneFactor: 0.6,
+  readIntensity: 0.55,
+  readIntensityMobile: 0.4,
+  safeZoneFactor: 0.68,
+  readSize: 0.9,
+  readMaxPx: 6,
   yaw: Object.freeze([0.4, 1.3, 2.2, 3.1, 4.0, 4.9, 5.8, 6.7]),
   pitch: Object.freeze([0.12, -0.22, 0.28, -0.12, 0.2, -0.25, 0.1, -0.15]),
   zoomDirections: Object.freeze(['left', 'right', 'top', 'bottom', 'top-left', 'bottom-right', 'right'] as const),
@@ -286,6 +297,31 @@ export const MAX_PIXEL_RATIO = { mobile: 1.5, desktop: 2 } as const
 
 /** Field of view dasar: layar sempit pakai FOV lebih lebar. */
 export const FOV = { narrow: 70, wide: 55, narrowBelow: 700 } as const
+
+/**
+ * Rata-rata dn (0 = dekat, 1 = jauh) atas titik yang terlihat pada pose netral (cameraFar 16,
+ * radius field 26, depthRange 36, bias pusat 0,7), hasil simulasi Monte Carlo desktop dan mobile
+ * (0,651 dan 0,668). Dipakai untuk menormalkan faktor kedalaman opasitas; bila cameraFar,
+ * depthRange atau sebaran field diubah banyak, angka ini sedikit meleset (selisih beberapa persen).
+ */
+export const DEPTH_MEAN_DN = 0.66
+
+/**
+ * Statistik opasitas titik untuk normalisasi keterbacaan. Opasitas puncak per titik di shader
+ * = pointOpacity × faktorKedalaman × faktorKecerahan; faktorKedalaman = 1 − 0,75·depthOpacity·dn,
+ * faktorKecerahan = 1 − brightnessVariation·U(0,1).
+ *  - mean: rata-rata opasitas puncak (pembagi gain baca: gain = opasitasEfektif / mean).
+ *  - max : opasitas puncak terbesar satu titik (titik terdekat dan paling cerah) = pointOpacity.
+ *  - peakOverMean: seberapa jauh titik terbaik di atas rata-rata (untuk pemeriksaan kontras).
+ */
+export function readStats(
+  p: Pick<PointFieldParams, 'pointOpacity' | 'depthOpacity' | 'brightnessVariation'>,
+): { mean: number; max: number; peakOverMean: number } {
+  const depthMean = 1 - 0.75 * p.depthOpacity * DEPTH_MEAN_DN
+  const brightMean = 1 - 0.5 * p.brightnessVariation
+  const mean = Math.max(0.001, p.pointOpacity * depthMean * brightMean)
+  return { mean, max: p.pointOpacity, peakOverMean: p.pointOpacity / mean }
+}
 
 /** Token CSS warna titik penuh (puncak jeda) dan warna baca (saat membaca); lihat src/styles/tokens.css. */
 export const COLOR_TOKENS = ['--titik-1', '--titik-2', '--titik-3'] as const

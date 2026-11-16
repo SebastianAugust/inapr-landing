@@ -236,3 +236,12 @@
   background: var(--bg);
   cursor: pointer;
 }
+
+/* Nilai efektif hasil hitung di bawah slider. */
+.tp-hint {
+  grid-column: 1 / -1;
+  margin: -0.125rem 0 0;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}

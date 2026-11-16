@@ -13,6 +13,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import {
   GEOMETRY_KEYS,
   POINTFIELD_DEFAULTS,
+  readStats,
   ZOOM_DIRECTIONS,
   type PointFieldParams,
   type ZoomDirection,
@@ -31,8 +32,8 @@ const THEME_LABEL: Record<ThemeName, string> = { light: 'Terang', dark: 'Gelap' 
 const READ_TOKENS = ['--titik-baca-1', '--titik-baca-2', '--titik-baca-3']
 /** Cadangan bila tokens.css tidak bisa dibaca lewat CSSOM; cermin nilai di src/styles/tokens.css. */
 const FALLBACK_READ_COLORS: ReadColors = {
-  light: ['#d7a6a3', '#fcba04', '#c0ada7'],
-  dark: ['#ac7204', '#957a7b', '#a50104'],
+  light: ['#a50104', '#fcba04', '#c86e00'],
+  dark: ['#fcba04', '#d8be94', '#d83a3d'],
 }
 const HEX = /^#[0-9a-f]{6}$/i
 
@@ -45,7 +46,12 @@ interface Spec {
   min: number
   max: number
   step: number
+  /** Nilai efektif hasil hitung (yang terlihat), ditampilkan di bawah slider. */
+  hint?: (params: PointFieldParams) => string
 }
+
+const pct = (value: number) => Math.round(value * 100) + '%'
+const op = (value: number) => value.toFixed(2)
 
 const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
   {
@@ -127,12 +133,48 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
   },
   {
     title: 'Keterbacaan teks',
-    note: 'I = lerp(I_baca, 1, jeda): titik diredam saat membaca, penuh di puncak jeda. Zona aman hanya desktop ≥ 1024px.',
+    note: 'Semua opasitas = OPASITAS EFEKTIF rata-rata titik setelah semua pengali (kedalaman, variasi, pointOpacity dinormalkan di shader). Menuju puncak jeda semuanya kembali penuh. Zona aman hanya desktop ≥ 1024px.',
     specs: [
-      { key: 'readIntensity', label: 'I_baca (opasitas saat membaca)', min: 0, max: 1, step: 0.01 },
-      { key: 'readSize', label: 'Ukuran_baca (× ukuran titik)', min: 0.1, max: 1.5, step: 0.05 },
-      { key: 'readMaxPx', label: 'Batas ukuran titik dekat (px)', min: 1, max: 12, step: 0.5 },
-      { key: 'safeZoneFactor', label: 'Zona aman: redaman (× di kolom)', min: 0, max: 1, step: 0.05 },
+      {
+        key: 'readIntensity',
+        label: 'Opasitas efektif: tepi / area tanpa teks',
+        min: 0.05,
+        max: 0.9,
+        step: 0.01,
+        hint: (p) => 'tepi ≈ ' + op(p.readIntensity) + ' · titik terbaik ≈ ' + op(Math.min(1, p.readIntensity * readStats(p).peakOverMean)) + ' · puncak jeda ≈ ' + op(readStats(p).mean),
+      },
+      {
+        key: 'readIntensityMobile',
+        label: 'Opasitas efektif: mobile (tanpa zona aman)',
+        min: 0.05,
+        max: 0.9,
+        step: 0.01,
+        hint: (p) => 'mobile ≈ ' + op(p.readIntensityMobile) + ' · titik terbaik ≈ ' + op(Math.min(1, p.readIntensityMobile * readStats(p).peakOverMean)),
+      },
+      {
+        key: 'safeZoneFactor',
+        label: 'Zona aman: pengali relatif thd tepi',
+        min: 0.2,
+        max: 1,
+        step: 0.01,
+        hint: (p) => 'tengah kolom ≈ ' + op(p.readIntensity * p.safeZoneFactor) + ' · tepi ≈ ' + op(p.readIntensity),
+      },
+      {
+        key: 'readSize',
+        label: 'Ukuran titik saat membaca (× normal)',
+        min: 0.3,
+        max: 1.5,
+        step: 0.05,
+        hint: (p) => 'ukuran ≈ ' + pct(p.readSize) + ' dari normal',
+      },
+      {
+        key: 'readMaxPx',
+        label: 'Batas ukuran titik dekat (px CSS)',
+        min: 1,
+        max: 12,
+        step: 0.5,
+        hint: (p) => 'batas ' + p.readMaxPx + ' px saat membaca → 9 px di puncak jeda',
+      },
     ],
   },
   {
@@ -506,7 +548,7 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         <br />
         <span className="tp-muted">T</span> {debug.T.toFixed(3)} → {debug.target.toFixed(3)} ·{' '}
         <span className="tp-muted">fase</span> {debug.phase} · <span className="tp-muted">m</span> {debug.morph.toFixed(2)} ·{' '}
-        <span className="tp-muted">I</span> {debug.readI.toFixed(2)}
+        <span className="tp-muted">opasitas efektif</span> {debug.effective.toFixed(2)}
         {debug.safeZone.on && <span className="tp-muted"> · zona aman</span>}
         {' · '}
         <span className="tp-muted">bentuk</span> {debug.shape >= 0 ? BREAK_SHAPES[debug.shape] : '–'}
@@ -551,6 +593,7 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
                     onChange={(event) => setScalar(spec.key, event.target.valueAsNumber)}
                     className="tp-range"
                   />
+                  {spec.hint && <span className="tp-hint">{spec.hint(params)}</span>}
                 </div>
               )
             })}
@@ -560,8 +603,8 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         <fieldset className="tp-group">
           <legend className="tp-legend">Warna baca per tema &amp; snap</legend>
           <p className="tp-note">
-            Token --titik-baca-1..3 (dicampur ke warna penuh menuju puncak jeda). Jangan dekat dengan warna teks; cek
-            kontras setelah menempel ke tokens.css: node scripts/check-reading-contrast.mjs
+            Token --titik-baca-1..3: warna jenuh (bukan pucat), dicampur ke warna penuh menuju puncak jeda. Jangan sama/dekat
+            dengan warna teks atau latar; cek setelah menempel ke tokens.css: node scripts/check-reading-contrast.mjs
           </p>
           {THEMES.map((theme) => (
             <div key={theme} className="tp-row tp-colors">
