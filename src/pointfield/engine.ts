@@ -22,6 +22,10 @@
  *   frame sebelumnya (kecepatan layar tiap titik) dan pulsa FOV dari kecepatan zoom.
  * - Posisi bentuk tujuan (aTarget) di-upload ulang hanya saat ganti bentuk, dan hanya
  *   ketika bentuk lama sudah lepas penuh (I = 0).
+ * - Keterbacaan teks: engine hanya mengirim uniform. uPeak = smoothstep(intensitas jeda m)
+ *   (0 saat membaca, 1 di puncak jeda); shader menurunkan opasitas/ukuran/warna titik saat
+ *   membaca. Zona aman = rect kolom konten (px layar → NDC x), diukur di measure() sehingga
+ *   ikut diperbarui saat resize, font, dan bahasa; tidak dipakai di bawah SAFE_ZONE.minWidth.
  * - Tanpa alokasi per frame. Semua parameter dari src/config/pointfield.ts; setParams()
  *   menerapkannya langsung (dipakai panel tuning dev).
  *
@@ -54,6 +58,8 @@ import {
   MAX_POINT_PX,
   POINTER,
   POINTFIELD_DEFAULTS,
+  READ_COLOR_TOKENS,
+  SAFE_ZONE,
   SETTLE,
   ZOOM_FX,
   type PointFieldParams,
@@ -96,6 +102,14 @@ export interface PointFieldDebug {
   geometryVersion: number
   /** Warna titik saat ini (hex), untuk memeriksa transisi tema. */
   colors: string[]
+  /** Warna baca saat ini (hex). */
+  readColors: string[]
+  /** Intensitas keterbacaan saat ini: I = lerp(readIntensity, 1, uPeak). */
+  readI: number
+  /** Puncak jeda ter-ease (0 = membaca, 1 = puncak). */
+  peak: number
+  /** Zona aman: aktif/tidak dan rect kolom konten (px layar). */
+  safeZone: { on: boolean; left: number; right: number }
 }
 
 export interface PointFieldEngine {
@@ -237,7 +251,10 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   }
   geometry = buildGeometry()
 
-  const colors = [new Color(), new Color(), new Color()] as const
+  // 0..2 = warna penuh (COLOR_TOKENS), 3..5 = warna baca (READ_COLOR_TOKENS).
+  const ALL_COLOR_TOKENS = [...COLOR_TOKENS, ...READ_COLOR_TOKENS] as const
+  const makeColors = () => ALL_COLOR_TOKENS.map(() => new Color())
+  const colors = makeColors()
   const uniforms = {
     uTime: { value: 0 },
     uFieldRadius: { value: params.fieldRadius },
@@ -286,6 +303,17 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     uColor1: { value: colors[0] },
     uColor2: { value: colors[1] },
     uColor3: { value: colors[2] },
+    uReadColor1: { value: colors[3] },
+    uReadColor2: { value: colors[4] },
+    uReadColor3: { value: colors[5] },
+    uPeak: { value: 0 },
+    uReadI: { value: params.readIntensity },
+    uReadSize: { value: params.readSize },
+    uReadMax: { value: params.readMaxPx },
+    uSafeX: { value: new Vector2(0, 0) },
+    uSafeOn: { value: 0 },
+    uSafeFactor: { value: params.safeZoneFactor },
+    uSafeFeather: { value: 0.1 },
   }
   const material = new ShaderMaterial({
     uniforms,
@@ -373,8 +401,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   /** Indeks elemen tujuan navigasi (lihat onClick). */
   let navIndex = 0
   /** Transisi warna tema: dari → ke, mulai (ms) atau -1 bila tidak aktif. */
-  const colorFrom = [new Color(), new Color(), new Color()] as const
-  const colorTo = [new Color(), new Color(), new Color()] as const
+  const colorFrom = makeColors()
+  const colorTo = makeColors()
   let colorStart = -1
   /** Posisi scroll terakhir yang diukur dengan tata letak lama (jangkar saat resize). */
   let lastTarget = -1
@@ -440,6 +468,10 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     uniforms.uNearFade.value = Math.max(0.2, params.nearFade)
     uniforms.uSizeVar.value = params.sizeVariation
     uniforms.uBrightVar.value = params.brightnessVariation
+    uniforms.uReadI.value = Math.min(1, Math.max(0, params.readIntensity))
+    uniforms.uReadSize.value = Math.max(0, params.readSize)
+    uniforms.uReadMax.value = Math.max(0.5, params.readMaxPx) * (pixelRatio || 1)
+    uniforms.uSafeFactor.value = Math.min(1, Math.max(0, params.safeZoneFactor))
     euler.set(params.revolutionTiltX, 0, params.revolutionTiltZ, 'XYZ')
     uniforms.uRevTilt.value.setFromMatrix4(matrix.makeRotationFromEuler(euler))
   }
@@ -448,7 +480,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   /** Baca warna token ke `out`. Bila token kosong, warna sebelumnya dipertahankan. */
   function readColors(out: readonly Color[] = colors): void {
     const style = getComputedStyle(document.documentElement)
-    COLOR_TOKENS.forEach((token, i) => {
+    ALL_COLOR_TOKENS.forEach((token, i) => {
       const value = style.getPropertyValue(token).trim()
       if (value) out[i].setStyle(value)
     })
@@ -461,7 +493,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       colorStart = -1
       return
     }
-    for (let i = 0; i < 3; i++) colorFrom[i].copy(colors[i])
+    for (let i = 0; i < colors.length; i++) colorFrom[i].copy(colors[i])
     readColors(colorTo)
     colorStart = performance.now()
   }
@@ -471,9 +503,37 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     if (colorStart < 0) return false
     const p = Math.min(1, (now - colorStart) / COLOR_FADE_MS)
     const eased = 1 - (1 - p) ** 2
-    for (let i = 0; i < 3; i++) colors[i].copy(colorFrom[i]).lerp(colorTo[i], eased)
+    for (let i = 0; i < colors.length; i++) colors[i].copy(colorFrom[i]).lerp(colorTo[i], eased)
     if (p >= 1) colorStart = -1
     return colorStart >= 0
+  }
+
+  /** Kolom konten (px layar, tanpa padding gutter): kotak isi Container section pertama. */
+  let safeLeft = 0
+  let safeRight = 0
+
+  function measureSafeZone(): void {
+    const container = seq.find((item) => item.kind === 'section')?.el.firstElementChild
+    if (container instanceof HTMLElement) {
+      const rect = container.getBoundingClientRect()
+      const style = getComputedStyle(container)
+      safeLeft = rect.left + (parseFloat(style.paddingLeft) || 0)
+      safeRight = rect.right - (parseFloat(style.paddingRight) || 0)
+    } else {
+      safeLeft = 0
+      safeRight = 0
+    }
+    applySafeZone()
+  }
+
+  /** Px layar → NDC x untuk shader. Mati di bawah SAFE_ZONE.minWidth (mobile) atau tanpa kolom. */
+  function applySafeZone(): void {
+    const w = width || host.clientWidth
+    const on = w >= SAFE_ZONE.minWidth && safeRight > safeLeft
+    uniforms.uSafeOn.value = on ? 1 : 0
+    if (!w) return
+    uniforms.uSafeX.value.set((safeLeft / w) * 2 - 1, (safeRight / w) * 2 - 1)
+    uniforms.uSafeFeather.value = (SAFE_ZONE.feather / w) * 2
   }
 
   function measure(): void {
@@ -483,6 +543,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       tops[i] = rect.top + y
       heights[i] = rect.height || 1
     }
+    measureSafeZone()
+    dirty = true
   }
 
   function resize(): boolean {
@@ -503,6 +565,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     resetPrev = true
     uniforms.uSize.value = params.pointSize * ratio
     uniforms.uSizeMax.value = MAX_POINT_PX * ratio
+    uniforms.uReadMax.value = Math.max(0.5, params.readMaxPx) * ratio
+    applySafeZone()
     uniforms.uScale.value = h * 0.5
     uniforms.uAspect.value = camera.aspect
     uniforms.uTanHalfFov.value = Math.tan((camera.fov * Math.PI) / 360)
@@ -790,6 +854,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       uniforms.uPointerActive.value = 0
       for (const ripple of uniforms.uRipples.value) ripple.w = 0
       uniforms.uMorph.value = intensity
+      uniforms.uPeak.value = intensity * intensity * (3 - 2 * intensity)
       uniforms.uStreak.value = 0
       updateShapeRotation()
       placeCamera(params.yaw[0], params.pitch[0], 0, 0, 0)
@@ -863,6 +928,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
 
     uniforms.uTime.value = time
     uniforms.uMorph.value = intensity
+    uniforms.uPeak.value = intensity * intensity * (3 - 2 * intensity)
     updateShapeRotation()
     renderer.render(scene, camera)
     dirty = false
@@ -1182,7 +1248,11 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
         dragging,
         reducedMotion: reduce,
         geometryVersion,
-        colors: colors.map((color) => color.getHexString()),
+        colors: colors.slice(0, 3).map((color) => color.getHexString()),
+        readColors: colors.slice(3).map((color) => color.getHexString()),
+        readI: uniforms.uReadI.value + (1 - uniforms.uReadI.value) * uniforms.uPeak.value,
+        peak: uniforms.uPeak.value,
+        safeZone: { on: uniforms.uSafeOn.value > 0, left: safeLeft, right: safeRight },
       }
     },
     destroy,

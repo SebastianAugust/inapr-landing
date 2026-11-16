@@ -167,7 +167,7 @@ html.pf-grabbing * {
   html.theme-transition *,
   html.theme-transition *::before,
   html.theme-transition *::after {
-    transition-property: background-color, border-color, color, fill, stroke, outline-color !important;
+    transition-property: background-color, border-color, color, fill, stroke, outline-color, text-shadow !important;
     transition-duration: 200ms !important;
     transition-timing-function: ease-out !important;
     transition-delay: 0ms !important;
@@ -196,6 +196,69 @@ html.pf-grabbing * {
   html {
     scroll-padding-top: calc(var(--nav-h) + 1rem);
     -webkit-text-size-adjust: 100%;
+    /*
+     * Scroll-snap: proximity (bukan mandatory), jadi scroll bebas dan hanya "menarik" bila
+     * berhenti dekat titik snap. Tanpa JS; skalar scroll T engine tetap dibaca dari scrollY.
+     * Dimatikan saat reduced motion (di bawah). Saklar uji: panel ?tune.
+     */
+    scroll-snap-type: y proximity;
+  }
+
+  /*
+   * Titik snap. Section: awal section (di bawah navbar sticky lewat scroll-padding-top).
+   * Section lebih tinggi dari viewport (terutama mobile) tetap bebas digulir: untuk snap area
+   * yang lebih besar dari snapport, posisi mana pun yang menutupi snapport adalah posisi
+   * snap yang sah, jadi isinya tidak terpotong atau terkunci. scroll-snap-stop: normal
+   * (default) = scroll cepat boleh melewati titik snap.
+   */
+  [data-section] {
+    scroll-snap-align: start;
+    scroll-snap-stop: normal;
+  }
+  /* Section pertama: titik snap di scrollY = 0, supaya banner draf tetap bisa terlihat penuh. */
+  [data-section='0'] {
+    scroll-margin-top: calc(var(--banner-h) - 1rem);
+  }
+  /*
+   * Jeda (Break): pusat jeda = pusat viewport sebenarnya (saat bentuk tertahan; T membaca
+   * titik tengah viewport). Snapport dikurangi scroll-padding-top, jadi pusatnya turun
+   * setengah padding; scroll-margin-bottom sebesar padding menggeser pusat area snap
+   * kembali ke pusat viewport.
+   */
+  [data-break] {
+    scroll-snap-align: center;
+    scroll-snap-stop: normal;
+    scroll-margin-bottom: calc(var(--nav-h) + 1rem);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-snap-type: none;
+    }
+  }
+
+  /*
+   * Halo teks tipis: bayangan sangat lembut berwarna latar di sekitar paragraf dan judul,
+   * supaya titik di belakang teks sedikit mereda. Hanya blur (tanpa offset), jadi tidak
+   * mengubah tata letak dan tidak tampak sebagai garis tepi. Latar nyata di <main> adalah
+   * --mat (bukan --bg); di dalam kartu opak, --halo diganti warna kartunya.
+   */
+  main {
+    --halo: var(--mat);
+  }
+  main .bg-surface {
+    --halo: var(--surface);
+  }
+  main .bg-soft {
+    --halo: var(--soft);
+  }
+  main .bg-bg {
+    --halo: var(--bg);
+  }
+  main :is(p, h1, h2, h3, h4, li, dd, blockquote) {
+    text-shadow:
+      0 0 0.35em color-mix(in srgb, var(--halo) 55%, transparent),
+      0 0 0.9em color-mix(in srgb, var(--halo) 35%, transparent);
   }
 
   @media (prefers-reduced-motion: no-preference) {

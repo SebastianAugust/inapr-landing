@@ -4,7 +4,7 @@
  * Atribut data-theme selalu di-set oleh script di index.html sebelum render,
  * lalu dijaga oleh src/hooks/useTheme.ts.
  *
- * Token titik (--titik-1/2/3) dibaca oleh engine 3D di tahap 2 lewat getComputedStyle.
+ * Token titik (--titik-1/2/3 dan --titik-baca-1/2/3) dibaca oleh engine 3D di tahap 2 lewat getComputedStyle.
  */
 :root {
   /* Terang: krem hangat, bukan putih polos. Kontras teks dicek WCAG AA (README). */
@@ -23,6 +23,15 @@
   --titik-1: #a50104;
   --titik-2: #250001;
   --titik-3: #fcba04;
+  /*
+   * Warna titik saat MEMBACA (di shader dicampur ke --titik-* menuju puncak jeda). Tidak
+   * boleh sama/dekat dengan --ink. Kontras teks isi di atas satu titik beropasitas
+   * readIntensity dicek: `node scripts/check-reading-contrast.mjs`. Rose (dari --accent)
+   * dan tint netral sudah dicampur ke arah latar supaya --muted tetap >= 4,5:1.
+   */
+  --titik-baca-1: #d7a6a3;
+  --titik-baca-2: #fcba04;
+  --titik-baca-3: #c0ada7;
 
   /*
    * Tinggi navbar/banner sticky. Nilai awal = hasil ukur per breakpoint (satu baris
@@ -58,6 +67,9 @@
   --titik-1: #fcba04;
   --titik-2: #f3f3f3;
   --titik-3: #a50104;
+  --titik-baca-1: #ac7204;
+  --titik-baca-2: #957a7b;
+  --titik-baca-3: #a50104;
 
   color-scheme: dark;
 }

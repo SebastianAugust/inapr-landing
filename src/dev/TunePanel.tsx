@@ -4,7 +4,10 @@
  * Dipasang oleh ./tune.tsx, yang dimuat dinamis dari <PointField /> di balik
  * `import.meta.env.DEV`, jadi tidak ikut bundel produksi. Nilai disimpan sementara di localStorage ("inapr-tune") supaya tidak
  * hilang saat refresh; "Reset" menghapusnya. "Salin nilai" menyalin objek siap tempel
- * ke src/config/pointfield.ts.
+ * ke src/config/pointfield.ts (plus blok CSS untuk warna baca di src/styles/tokens.css).
+ *
+ * Di luar PointFieldParams: warna baca per tema (token --titik-baca-*, dipasang lewat
+ * <style> sementara) dan saklar scroll-snap (style inline di <html>, hanya untuk menguji).
  */
 import { useEffect, useId, useRef, useState } from 'react'
 import {
@@ -19,6 +22,19 @@ import type { PointFieldDebug, PointFieldEngine } from '@/pointfield/engine'
 
 const STORAGE_KEY = 'inapr-tune'
 const REBUILD_DELAY = 300
+const OVERRIDE_STYLE_ID = 'inapr-tune-read-colors'
+
+type ThemeName = 'light' | 'dark'
+type ReadColors = Record<ThemeName, string[]>
+const THEMES: readonly ThemeName[] = ['light', 'dark']
+const THEME_LABEL: Record<ThemeName, string> = { light: 'Terang', dark: 'Gelap' }
+const READ_TOKENS = ['--titik-baca-1', '--titik-baca-2', '--titik-baca-3']
+/** Cadangan bila tokens.css tidak bisa dibaca lewat CSSOM; cermin nilai di src/styles/tokens.css. */
+const FALLBACK_READ_COLORS: ReadColors = {
+  light: ['#d7a6a3', '#fcba04', '#c0ada7'],
+  dark: ['#ac7204', '#957a7b', '#a50104'],
+}
+const HEX = /^#[0-9a-f]{6}$/i
 
 type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections'>
 type AngleKey = 'yaw' | 'pitch'
@@ -110,6 +126,16 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
     ],
   },
   {
+    title: 'Keterbacaan teks',
+    note: 'I = lerp(I_baca, 1, jeda): titik diredam saat membaca, penuh di puncak jeda. Zona aman hanya desktop ≥ 1024px.',
+    specs: [
+      { key: 'readIntensity', label: 'I_baca (opasitas saat membaca)', min: 0, max: 1, step: 0.01 },
+      { key: 'readSize', label: 'Ukuran_baca (× ukuran titik)', min: 0.1, max: 1.5, step: 0.05 },
+      { key: 'readMaxPx', label: 'Batas ukuran titik dekat (px)', min: 1, max: 12, step: 0.5 },
+      { key: 'safeZoneFactor', label: 'Zona aman: redaman (× di kolom)', min: 0, max: 1, step: 0.05 },
+    ],
+  },
+  {
     title: 'Titik & field',
     note: 'Jumlah titik, radius, dan bias pusat → geometri dibangun ulang (jeda 300 ms).',
     specs: [
@@ -174,26 +200,109 @@ function sanitize(raw: unknown): PointFieldParams {
   return out
 }
 
-function loadSaved(): PointFieldParams | null {
+/** Warna baca dari tokens.css lewat CSSOM (lembar penimpa panel sendiri dilewati). */
+function tokenReadColors(): ReadColors {
+  const out: ReadColors = { light: [...FALLBACK_READ_COLORS.light], dark: [...FALLBACK_READ_COLORS.dark] }
+  try {
+    for (const sheet of Array.from(document.styleSheets)) {
+      if ((sheet.ownerNode as Element | null)?.id === OVERRIDE_STYLE_ID) continue
+      let rules: CSSRuleList
+      try {
+        rules = sheet.cssRules
+      } catch {
+        continue
+      }
+      for (const rule of Array.from(rules)) {
+        if (!(rule instanceof CSSStyleRule)) continue
+        const selector = rule.selectorText.replace(/\s+/g, '')
+        const theme: ThemeName | null =
+          selector === ':root' ? 'light' : /^:root\[data-theme=["']?dark["']?\]$/.test(selector) ? 'dark' : null
+        if (!theme) continue
+        READ_TOKENS.forEach((token, i) => {
+          const value = rule.style.getPropertyValue(token).trim().toLowerCase()
+          if (HEX.test(value)) out[theme][i] = value
+        })
+      }
+    }
+  } catch {
+    // pakai cadangan
+  }
+  return out
+}
+
+interface Extras {
+  colors: ReadColors
+  /** Scroll-snap aktif (default). Mati = style inline scroll-snap-type: none di <html>. */
+  snap: boolean
+}
+
+function sanitizeExtras(raw: unknown, base: ReadColors): Extras {
+  const extras: Extras = { colors: { light: [...base.light], dark: [...base.dark] }, snap: true }
+  if (!raw || typeof raw !== 'object') return extras
+  const source = raw as Record<string, unknown>
+  const colors = source.readColors as Record<string, unknown> | undefined
+  for (const theme of THEMES) {
+    const list = colors?.[theme]
+    if (Array.isArray(list) && list.length === 3 && list.every((v) => typeof v === 'string' && HEX.test(v))) {
+      extras.colors[theme] = list.map((v: string) => v.toLowerCase())
+    }
+  }
+  if (source.snap === false) extras.snap = false
+  return extras
+}
+
+function loadSaved(base: ReadColors): { params: PointFieldParams; extras: Extras } | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
-    return raw ? sanitize(JSON.parse(raw)) : null
+    if (!raw) return null
+    const json: unknown = JSON.parse(raw)
+    return { params: sanitize(json), extras: sanitizeExtras(json, base) }
   } catch {
     return null
   }
 }
 
-function sameAsDefaults(params: PointFieldParams): boolean {
-  return JSON.stringify(params) === JSON.stringify(defaults())
+function sameAsDefaults(params: PointFieldParams, extras: Extras, base: ReadColors): boolean {
+  return (
+    JSON.stringify(params) === JSON.stringify(defaults()) &&
+    extras.snap &&
+    JSON.stringify(extras.colors) === JSON.stringify(base)
+  )
 }
 
-function persist(params: PointFieldParams): void {
+function persist(params: PointFieldParams, extras: Extras, base: ReadColors): void {
   try {
-    if (sameAsDefaults(params)) window.localStorage.removeItem(STORAGE_KEY)
-    else window.localStorage.setItem(STORAGE_KEY, JSON.stringify(params))
+    if (sameAsDefaults(params, extras, base)) window.localStorage.removeItem(STORAGE_KEY)
+    else window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...params, readColors: extras.colors, snap: extras.snap }))
   } catch {
     // Mode privat / storage diblokir: abaikan, nilai tetap berlaku sampai refresh.
   }
+}
+
+/** Pasang/lepas <style> yang menimpa token warna baca (hanya nilai yang berbeda dari tokens.css). */
+function applyColorOverrides(colors: ReadColors, base: ReadColors): void {
+  const block = (theme: ThemeName, selector: string) => {
+    const decls = READ_TOKENS.map((token, i) => (colors[theme][i] !== base[theme][i] ? token + ':' + colors[theme][i] + ';' : '')).join('')
+    return decls ? selector + '{' + decls + '}' : ''
+  }
+  const css = block('light', ':root') + block('dark', ":root[data-theme='dark']")
+  let el = document.getElementById(OVERRIDE_STYLE_ID)
+  if (!css) {
+    el?.remove()
+    return
+  }
+  if (!el) {
+    el = document.createElement('style')
+    el.id = OVERRIDE_STYLE_ID
+    document.head.appendChild(el)
+  }
+  el.textContent = css
+}
+
+/** Saklar scroll-snap untuk pengujian: style inline mengalahkan aturan di global.css. */
+function applySnap(on: boolean): void {
+  if (on) document.documentElement.style.removeProperty('scroll-snap-type')
+  else document.documentElement.style.setProperty('scroll-snap-type', 'none')
 }
 
 function clear(): void {
@@ -207,17 +316,26 @@ function clear(): void {
 /** Bulatkan noise float (0.30000000000000004 → 0.3). */
 const tidy = (value: number) => Number(value.toFixed(4))
 
-/** Objek siap tempel ke src/config/pointfield.ts. */
-function toSource(params: PointFieldParams): string {
+/** Objek siap tempel ke src/config/pointfield.ts, plus warna baca (tokens.css) dan status snap. */
+function toSource(params: PointFieldParams, extras: Extras): string {
   const lines = SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)
   const list = (values: readonly number[]) => values.map(tidy).join(', ')
+  const tokens = (theme: ThemeName) => READ_TOKENS.map((token, i) => '  ' + token + ': ' + extras.colors[theme][i] + ';')
   return [
+    '// src/config/pointfield.ts',
     'export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({',
     ...lines,
     `  yaw: Object.freeze([${list(params.yaw)}]),`,
     `  pitch: Object.freeze([${list(params.pitch)}]),`,
     `  zoomDirections: Object.freeze([${params.zoomDirections.map((dir) => `'${dir}'`).join(', ')}] as const),`,
     '})',
+    '',
+    '/* src/styles/tokens.css: warna baca, tema Terang (:root) */',
+    ...tokens('light'),
+    "/* src/styles/tokens.css: warna baca, tema Gelap (:root[data-theme='dark']) */",
+    ...tokens('dark'),
+    '',
+    '// scroll-snap: ' + (extras.snap ? 'aktif' : 'MATI (hanya untuk pengujian; default di global.css tetap y proximity)'),
     '',
   ].join('\n')
 }
@@ -234,7 +352,11 @@ function pickGeometry(params: PointFieldParams): Pick<PointFieldParams, (typeof 
 
 export function TunePanel({ engine }: { engine: PointFieldEngine }) {
   const uid = useId()
-  const [params, setParams] = useState<PointFieldParams>(() => loadSaved() ?? defaults())
+  // Nilai tokens.css dibaca sekali, sebelum lembar penimpa panel dipasang.
+  const [base] = useState<ReadColors>(() => tokenReadColors())
+  const [saved] = useState(() => loadSaved(base))
+  const [params, setParams] = useState<PointFieldParams>(() => saved?.params ?? defaults())
+  const [extras, setExtras] = useState<Extras>(() => saved?.extras ?? sanitizeExtras(null, base))
   const [open, setOpen] = useState(true)
   const [debug, setDebug] = useState<PointFieldDebug>(() => engine.debug())
   const [message, setMessage] = useState('')
@@ -271,10 +393,30 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
       engine.setParams(params)
       applied.current = params
     }
-    persist(params)
   }, [engine, params])
 
-  useEffect(() => () => window.clearTimeout(rebuildTimer.current), [])
+  // Warna baca per tema dan snap. Dibongkar saat panel ditutup (efek di bawah).
+  useEffect(() => {
+    applyColorOverrides(extras.colors, base)
+    engine.refreshColors()
+  }, [engine, extras.colors, base])
+
+  useEffect(() => {
+    applySnap(extras.snap)
+  }, [extras.snap])
+
+  useEffect(() => {
+    persist(params, extras, base)
+  }, [params, extras, base])
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(rebuildTimer.current)
+      document.getElementById(OVERRIDE_STYLE_ID)?.remove()
+      applySnap(true)
+    },
+    [],
+  )
 
   // Indikator posisi.
   useEffect(() => {
@@ -303,15 +445,25 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
     })
   }
 
+  const setReadColor = (theme: ThemeName, index: number, value: string) => {
+    if (!HEX.test(value)) return
+    setExtras((current) => {
+      const list = [...current.colors[theme]]
+      list[index] = value.toLowerCase()
+      return { ...current, colors: { ...current.colors, [theme]: list } }
+    })
+  }
+
   const reset = () => {
     clear()
     setParams(defaults())
+    setExtras(sanitizeExtras(null, base))
     setManualCopy(null)
     setMessage('Direset ke default.')
   }
 
   const copy = async () => {
-    const text = toSource(params)
+    const text = toSource(params, extras)
     try {
       await navigator.clipboard.writeText(text)
       setManualCopy(null)
@@ -353,7 +505,9 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         <span className="tp-muted">Posisi:</span> elemen {debug.item} · {position}
         <br />
         <span className="tp-muted">T</span> {debug.T.toFixed(3)} → {debug.target.toFixed(3)} ·{' '}
-        <span className="tp-muted">fase</span> {debug.phase} · <span className="tp-muted">m</span> {debug.morph.toFixed(2)}
+        <span className="tp-muted">fase</span> {debug.phase} · <span className="tp-muted">m</span> {debug.morph.toFixed(2)} ·{' '}
+        <span className="tp-muted">I</span> {debug.readI.toFixed(2)}
+        {debug.safeZone.on && <span className="tp-muted"> · zona aman</span>}
         {' · '}
         <span className="tp-muted">bentuk</span> {debug.shape >= 0 ? BREAK_SHAPES[debug.shape] : '–'}
         <br />
@@ -402,6 +556,39 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
             })}
           </fieldset>
         ))}
+
+        <fieldset className="tp-group">
+          <legend className="tp-legend">Warna baca per tema &amp; snap</legend>
+          <p className="tp-note">
+            Token --titik-baca-1..3 (dicampur ke warna penuh menuju puncak jeda). Jangan dekat dengan warna teks; cek
+            kontras setelah menempel ke tokens.css: node scripts/check-reading-contrast.mjs
+          </p>
+          {THEMES.map((theme) => (
+            <div key={theme} className="tp-row tp-colors">
+              <span>{THEME_LABEL[theme]}</span>
+              {extras.colors[theme].map((color, i) => (
+                <input
+                  key={READ_TOKENS[i]}
+                  type="color"
+                  value={color}
+                  aria-label={'Warna baca ' + (i + 1) + ', tema ' + THEME_LABEL[theme] + ' (' + color + ')'}
+                  title={color}
+                  onChange={(event) => setReadColor(theme, i, event.target.value)}
+                  className="tp-color"
+                />
+              ))}
+            </div>
+          ))}
+          <div className="tp-row tp-colors">
+            <label htmlFor={uid + '-snap'}>Scroll-snap (y proximity)</label>
+            <input
+              id={uid + '-snap'}
+              type="checkbox"
+              checked={extras.snap}
+              onChange={(event) => setExtras((current) => ({ ...current, snap: event.target.checked }))}
+            />
+          </div>
+        </fieldset>
 
         <table className="tp-table">
           <caption className="tp-caption">Per section: yaw / pitch netral (rad) + arah zoom di jeda sesudahnya</caption>

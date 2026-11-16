@@ -24,6 +24,12 @@
  *   opasitas= uOpacity × mix(1, redup, dn) × kecerahan acak × fade dekat bidang near
  *   Titik bentuk (w → 1) mengabaikan pelemahan jarak supaya bentuk terbaca solid.
  *
+ * Keterbacaan teks: I = mix(uReadI, 1, uPeak) dengan uPeak = smoothstep(intensitas jeda m).
+ *   Saat membaca (uPeak = 0) opasitas × uReadI, ukuran × uReadSize dan dibatasi uReadMax,
+ *   warna = warna baca, dorong/riak pointer × I, dan titik di dalam kolom konten (uSafeX,
+ *   desktop saja) diredam × uSafeFactor dengan tepi smoothstep. Di puncak jeda (uPeak = 1)
+ *   semuanya kembali ke nilai penuh, jadi bentuk tidak berubah dari sebelumnya.
+ *
  * Streak: kecepatan layar tiap titik = selisih proyeksi dengan matriks view-proyeksi frame
  * sebelumnya (uPrevViewProj). Sprite memanjang searah kecepatan itu (aliran radial saat
  * zoom, geser saat kamera menyimpang) sebanding panjang gerak; fragment shader menggambar
@@ -75,6 +81,17 @@ uniform float uStreakMax;
 uniform vec3 uColor1;
 uniform vec3 uColor2;
 uniform vec3 uColor3;
+uniform vec3 uReadColor1;
+uniform vec3 uReadColor2;
+uniform vec3 uReadColor3;
+uniform float uPeak;
+uniform float uReadI;
+uniform float uReadSize;
+uniform float uReadMax;
+uniform vec2 uSafeX;
+uniform float uSafeOn;
+uniform float uSafeFactor;
+uniform float uSafeFeather;
 
 attribute vec3 aTarget;
 attribute float aDelay;
@@ -90,6 +107,8 @@ varying vec2 vDir;
 varying float vStretch;
 
 void main() {
+  // Intensitas keterbacaan: uReadI saat membaca, 1 di puncak jeda.
+  float readI = mix(uReadI, 1.0, uPeak);
   float rn = clamp(length(position) / uFieldRadius, 0.0, 1.0);
   float speed = uRevSpeed * (1.0 + uRevCore * (1.0 - rn)) * (1.0 + uRevVar * aSpin);
   float a = uTime * speed;
@@ -140,7 +159,7 @@ void main() {
       }
     }
 
-    offset *= mix(1.0, uPushShape, w);
+    offset *= mix(1.0, uPushShape, w) * readI;
     // NDC (dikoreksi aspek) → ruang kamera: Δ = offset * kedalaman * tan(fov/2).
     mv.xy += offset * (-mv.z) * uTanHalfFov;
     clip = projectionMatrix * mv;
@@ -152,18 +171,30 @@ void main() {
   dn *= 1.0 - w * 0.85; // titik bentuk tetap solid
   float sizeDepth = mix(1.0 + 0.5 * uDepthSize, 1.0 - 0.4 * uDepthSize, dn);
   float sizeVar = 1.0 + uSizeVar * (aSeed * 2.0 - 1.0);
-  float size = min(uSize * (uScale / depth) * sizeDepth * sizeVar, uSizeMax);
+  // Saat membaca: ukuran dikecilkan dan dibatasi (tanpa bercak besar di belakang paragraf).
+  float sizeCap = mix(uReadMax, uSizeMax, uPeak);
+  float size = min(uSize * (uScale / depth) * sizeDepth * sizeVar * mix(uReadSize, 1.0, uPeak), sizeCap);
 
-  float alpha = uOpacity * mix(1.0, 1.0 - 0.75 * uDepthOpacity, dn);
+  float alpha = uOpacity * readI * mix(1.0, 1.0 - 0.75 * uDepthOpacity, dn);
   alpha *= 1.0 - uBrightVar * fract(aSeed * 91.7);
   alpha *= smoothstep(0.15, max(uNearFade, 0.2), depth);
   alpha /= 1.0 + 0.35 * (stretch - 1.0);
 
+  // Zona aman: redam titik yang di layar berada di kolom konten (tepi lembut, hanya saat membaca).
+  if (uSafeOn > 0.0 && clip.w > 0.0) {
+    float sx = clip.x / clip.w;
+    float zone = smoothstep(uSafeX.x - uSafeFeather, uSafeX.x + uSafeFeather, sx)
+      * (1.0 - smoothstep(uSafeX.y - uSafeFeather, uSafeX.y + uSafeFeather, sx));
+    alpha *= mix(1.0, uSafeFactor, zone * (1.0 - uPeak));
+  }
+
   gl_Position = clip;
   // Sprite persegi dirasterisasi penuh: batasi ukuran akhir (streak ikut) demi fill-rate.
-  gl_PointSize = min(size * stretch, uSizeMax * 3.0);
+  gl_PointSize = min(size * stretch, sizeCap * 3.0);
   vAlpha = alpha;
-  vColor = aPalette < 0.5 ? uColor1 : (aPalette < 1.5 ? uColor2 : uColor3);
+  vec3 full = aPalette < 0.5 ? uColor1 : (aPalette < 1.5 ? uColor2 : uColor3);
+  vec3 reading = aPalette < 0.5 ? uReadColor1 : (aPalette < 1.5 ? uReadColor2 : uReadColor3);
+  vColor = mix(reading, full, uPeak);
 }
 `
 

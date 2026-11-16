@@ -141,6 +141,23 @@ export interface PointFieldParams {
 
   /** Parallax latar cutting mat: offset = -scrollY * faktor. 0 = mati. */
   matParallax: number
+
+  // ---- Keterbacaan teks (shader; titik diredam saat membaca, penuh di puncak jeda) ----
+  /**
+   * Intensitas titik saat MEMBACA (di dalam section): opasitas titik dikali nilai ini. Menuju
+   * puncak jeda naik ke 1 mengikuti intensitas jeda m: I = lerp(readIntensity, 1, smoothstep(m)).
+   * Dicek WCAG lewat `node scripts/check-reading-contrast.mjs` (warna baca ada di tokens.css).
+   */
+  readIntensity: number
+  /** Pengali ukuran titik saat membaca (1 di puncak jeda). */
+  readSize: number
+  /** Ukuran piksel CSS maksimum per titik saat membaca; melonggar ke MAX_POINT_PX di puncak jeda. */
+  readMaxPx: number
+  /**
+   * Zona aman (desktop ≥ SAFE_ZONE.minWidth): pengali opasitas tambahan untuk titik yang
+   * secara layar berada di dalam kolom konten (1 = mati). Melemah ke 1 menuju puncak jeda.
+   */
+  safeZoneFactor: number
   /**
    * Arah pandang netral di AKHIR tiap section (8 entri, indeks = data-section). Di dalam
    * section, arah berputar pelan dari nilai section sebelumnya ke nilai ini; di jeda
@@ -203,6 +220,10 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   dragSensitivity: 0.008,
   dragInertia: 0.93,
   matParallax: 0.1,
+  readIntensity: 0.4,
+  readSize: 0.75,
+  readMaxPx: 4,
+  safeZoneFactor: 0.6,
   yaw: Object.freeze([0.4, 1.3, 2.2, 3.1, 4.0, 4.9, 5.8, 6.7]),
   pitch: Object.freeze([0.12, -0.22, 0.28, -0.12, 0.2, -0.25, 0.1, -0.15]),
   zoomDirections: Object.freeze(['left', 'right', 'top', 'bottom', 'top-left', 'bottom-right', 'right'] as const),
@@ -266,5 +287,12 @@ export const MAX_PIXEL_RATIO = { mobile: 1.5, desktop: 2 } as const
 /** Field of view dasar: layar sempit pakai FOV lebih lebar. */
 export const FOV = { narrow: 70, wide: 55, narrowBelow: 700 } as const
 
-/** Token CSS warna titik (lihat src/styles/tokens.css). */
+/** Token CSS warna titik penuh (puncak jeda) dan warna baca (saat membaca); lihat src/styles/tokens.css. */
 export const COLOR_TOKENS = ['--titik-1', '--titik-2', '--titik-3'] as const
+export const READ_COLOR_TOKENS = ['--titik-baca-1', '--titik-baca-2', '--titik-baca-3'] as const
+
+/**
+ * Zona aman: hanya dipakai bila lebar canvas ≥ minWidth (px); `feather` = setengah lebar tepi
+ * lembut (px) di kiri/kanan kolom konten.
+ */
+export const SAFE_ZONE = { minWidth: 1024, feather: 56 } as const

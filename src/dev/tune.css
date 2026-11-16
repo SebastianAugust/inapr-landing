@@ -216,3 +216,23 @@
   font-family: ui-monospace, monospace;
   font-size: 0.7rem;
 }
+
+/* Warna baca per tema + saklar snap: baris dengan beberapa kontrol kecil. */
+.tp-row.tp-colors {
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+  justify-content: start;
+}
+
+.tp-row.tp-colors > label {
+  grid-column: 1 / 4;
+}
+
+.tp-color {
+  width: 2.25rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+}
