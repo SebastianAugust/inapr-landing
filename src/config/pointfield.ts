@@ -112,6 +112,12 @@ export interface PointFieldParams {
   rippleStrength: number
   rippleWidth: number
   rippleDamping: number
+  /**
+   * Putar bentuk dengan drag mouse (klik tahan + geser di area kosong saat bentuk tampil):
+   * kepekaan (radian per px) dan inersia setelah dilepas (kecepatan yang tersisa per frame 60 fps).
+   */
+  dragSensitivity: number
+  dragInertia: number
 
   /** Parallax latar cutting mat: offset = -scrollY * faktor. 0 = mati. */
   matParallax: number
@@ -169,6 +175,8 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   rippleStrength: 0.05,
   rippleWidth: 0.12,
   rippleDamping: 1.6,
+  dragSensitivity: 0.008,
+  dragInertia: 0.93,
   matParallax: 0.1,
   yaw: Object.freeze([0.4, 2.6, 4.7, 0.9, 3.2, 5.4, 1.7, 3.9]),
   pitch: Object.freeze([0.12, -0.22, 0.28, -0.12, 0.2, -0.25, 0.1, -0.15]),
@@ -210,9 +218,18 @@ export const SETTLE = { idleMs: 450, rate: 0.07, scrollRate: 0.35 } as const
 /**
  * Pointer: efek memudar setelah idleMs tanpa gerak; `fade` = faktor per frame naik/turun;
  * `pushSmoothing` = kehalusan posisi medan dorong; maks. riak bersamaan; tap = sentuhan
- * yang bergerak < tapSlop px dan < tapMs.
+ * yang bergerak < tapSlop px dan < tapMs; drag putar bentuk hanya bila intensitas bentuk
+ * ≥ dragMinMorph.
  */
-export const POINTER = { idleMs: 2000, fade: 0.08, pushSmoothing: 0.3, maxRipples: 3, tapSlop: 12, tapMs: 350 } as const
+export const POINTER = {
+  idleMs: 2000,
+  fade: 0.08,
+  pushSmoothing: 0.3,
+  maxRipples: 3,
+  tapSlop: 12,
+  tapMs: 350,
+  dragMinMorph: 0.35,
+} as const
 
 /** Batas devicePixelRatio. */
 export const MAX_PIXEL_RATIO = { mobile: 1.5, desktop: 2 } as const

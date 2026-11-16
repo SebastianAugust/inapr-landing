@@ -95,6 +95,8 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
       { key: 'rippleStrength', label: 'Riak: kekuatan', min: 0, max: 0.3, step: 0.005 },
       { key: 'rippleWidth', label: 'Riak: lebar gelombang', min: 0.02, max: 0.6, step: 0.01 },
       { key: 'rippleDamping', label: 'Riak: redaman (1/s)', min: 0.1, max: 6, step: 0.05 },
+      { key: 'dragSensitivity', label: 'Drag putar: kepekaan (rad/px)', min: 0, max: 0.03, step: 0.001 },
+      { key: 'dragInertia', label: 'Drag putar: inersia', min: 0, max: 0.99, step: 0.01 },
     ],
   },
   {
@@ -347,6 +349,7 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         <span className="tp-muted">N</span> {debug.count} ({debug.device}, {debug.wide ? '≥ 1024px' : '< 1024px'})
         {' · '}
         <span className="tp-muted">pointer</span> {debug.pointer.toFixed(2)} · <span className="tp-muted">riak</span> {debug.ripples}
+        {debug.dragging && <span className="tp-accent"> · drag</span>}
         {debug.reducedMotion && <span className="tp-accent"> · reduced motion: statis</span>}
       </p>
 

@@ -43,8 +43,7 @@ export const en: Dictionary = {
     cta: 'Become a Member',
     openMenu: 'Menu',
     closeMenu: 'Close',
-    themeLabel: 'Theme',
-    themes: { light: 'Light', dark: 'Dark', system: 'System' },
+    theme: { toDark: 'Switch to dark mode', toLight: 'Switch to light mode' },
     langLabel: 'Language',
   },
   tentang: {

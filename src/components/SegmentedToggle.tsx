@@ -71,7 +71,6 @@ export function SegmentedToggle<T extends string>({
       <span aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-full">
         <span
           ref={thumbRef}
-          data-toggle-thumb=""
           className="absolute inset-y-0 left-0 w-px origin-left bg-accent opacity-0 transition-transform duration-200 ease-out group-data-[ready=true]:opacity-100"
         />
       </span>

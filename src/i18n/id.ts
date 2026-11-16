@@ -47,8 +47,7 @@ export const id: Dictionary = {
     cta: 'Daftar Anggota',
     openMenu: 'Menu',
     closeMenu: 'Tutup',
-    themeLabel: 'Tema',
-    themes: { light: 'Terang', dark: 'Gelap', system: 'Sistem' },
+    theme: { toDark: 'Ganti ke mode gelap', toLight: 'Ganti ke mode terang' },
     langLabel: 'Bahasa',
   },
   tentang: {

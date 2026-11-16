@@ -44,12 +44,12 @@ scripts/
 src/
   main.tsx              entri klien (font, CSS global, render <App />)
   entry-server.tsx      entri prerender
-  App.tsx               urutan halaman: Navbar, section + celah (SectionGap), Footer
+  App.tsx               urutan halaman: Navbar, section + jeda (Break), rel section, Footer
   styles/tokens.css     design token (warna Terang/Gelap, font, tinggi navbar)
   styles/global.css     base style, utility cutting-mat, reduced motion
   i18n/                 kamus id.ts / en.ts, tipe di types.ts, hook useI18n
-  hooks/                useTheme, useActiveSection, useHeaderMetrics, useLazyData
-  components/           Navbar, Banner, Footer, Section, SectionGap, PointField, WebinarList, ...
+  hooks/                useTheme, useActiveSection, useHeaderMetrics, useLazyData, usePointerFx
+  components/           Navbar, Banner, Footer, Section, Break, SectionRail, PointField, ...
   sections/             satu file per section; urutan di sections/index.ts
   data/                 members.json, webinars.json (dimuat lazy) + loader di index.ts
   config/pointfield.ts  semua parameter animasi titik 3D (satu sumber)
@@ -83,11 +83,19 @@ elemen dekoratif: border kartu (`--line`) dan titik `--titik-3`.
 
 ## Tema
 
-- Pilihan Terang, Gelap, atau Sistem disimpan di `localStorage` (`inapr-theme`).
-- Script kecil di `index.html` memasang `data-theme` di `<html>` sebelum render, jadi tidak ada
-  kedipan tema yang salah.
-- `src/hooks/useTheme.ts` menjaga atribut tersebut, mengikuti perubahan tema sistem, dan menyamakan
-  `meta theme-color`.
+- Satu tombol ikon (`src/components/ThemeToggle.tsx`). Ikon = tema yang sedang **aktif**:
+  matahari = Terang, bulan = Gelap.
+- Default mengikuti `prefers-color-scheme`. Selama tombol belum pernah diklik, tampilan langsung
+  ikut saat tema sistem berubah.
+- Klik: ganti Terang ↔ Gelap dari tema yang sedang tampil, lalu simpan `light`/`dark` di
+  `localStorage` (`inapr-theme`). Setelah itu perubahan tema sistem diabaikan. Tanpa
+  localStorage, tombol tetap berfungsi untuk sesi itu.
+- Script kecil di `index.html` memasang `data-theme` dan `meta theme-color` sebelum render
+  (pilihan tersimpan; kalau tidak ada, tema sistem), jadi tidak ada kedipan tema yang salah.
+  Ikon tombol dipilih CSS dari `data-theme`, jadi benar sejak paint pertama.
+- `src/hooks/useTheme.ts` menjaga atribut tersebut dan menyamakan `meta theme-color`.
+- Aksesibilitas: `aria-label` menyebut aksi ("Ganti ke mode gelap/terang"), `aria-pressed`
+  bernilai true saat Gelap aktif, ikon `aria-hidden`.
 
 ## Bahasa (i18n) dan cara mengubah teks
 
@@ -104,34 +112,43 @@ elemen dekoratif: border kartu (`--line`) dan titik `--titik-3`.
 
 Konsep:
 
+- **Saat membaca section:** kamera netral (zoom-out), seluruh titik berupa bintang. Layout halaman
+  tidak dipengaruhi animasi.
 - **Bintang selalu bergerak.** Seluruh titik berputar pelan mengelilingi pusat field seperti
   galaksi, tidak bergantung scroll. Titik dekat pusat sedikit lebih cepat, ada variasi acak per
   titik, plus gerak halus sinus. Semua dihitung di GPU (`shaders.ts`) dari uniform `uTime` dan
   atribut per titik.
 - **Titik bentuk.** Sebagian titik (`shapeShare`, default 55%) dipilih acak tetap (PRNG seeded,
-  `GEOMETRY_SEED`) untuk menjadi bentuk. Sisanya tetap bintang.
-- **Satu bentuk per section 2..8**, berurutan: kubus, bola, torus, piramid, silinder,
-  oktahedron, heliks. Section 1 (hero) hanya bintang. Sisi default (`sides`): kanan, kiri,
-  kanan, kiri, atas, bawah, kanan. Sisi mendukung kiri/kanan/atas/bawah dan keempat sudut.
-- **Siklus per section** dari progres scroll section itu:
-  - MASUK (`phaseEnter`, 20%): kamera zoom-in menuju sisi bentuk, titik bentuk berkumpul;
-  - TAHAN (sisanya, ±58%): bentuk utuh dan berputar pelan, kamera hampir diam;
-  - LEPAS (`phaseRelease`, 22%): bentuk kembali menjadi bintang, kamera zoom-out.
+  `GEOMETRY_SEED`). Sisanya selalu bintang.
+- **Di tiap jeda** (`Break`, ruang scroll kosong 70vh / 60svh, tanpa teks):
+  - ZOOM IN 0–35%: kamera mendekat dan menengok ke satu sisi layar, bentuk terbentuk;
+  - TAHAN 35–60%: bentuk utuh, berputar pelan;
+  - LEPAS 60–100%: bentuk kembali menjadi bintang, kamera zoom-out sambil berbelok ke arah
+    pandang section berikutnya.
 
-  Di celah antar section (`SectionGap`, ±30vh) kamera berada di posisi zoom-out netral dan
-  arah pandangnya berputar halus ke section berikutnya.
-- **Posisi bentuk di layar.** Titik sasaran di layar di-unproject dari pose kamera zoom-in
+  Section berikutnya selalu mulai di keadaan netral.
+- **Bentuk per jeda 1..7:** kubus, bola, torus, piramid, silinder, oktahedron, heliks.
+- **Sisi default (`sides`):** kiri, kanan, atas, bawah, kanan, kiri, atas. Keempat sudut juga
+  didukung.
+- **Posisi bentuk di layar.** Titik sasaran di layar di-unproject dari pose kamera zoom-in penuh
   pada jarak `shapeDepth`:
-  - kiri/kanan: pusat 30% dari tepi layar;
-  - atas/bawah: pusat 24% dari tepi;
-  - layar < 1024px: selalu di pita atas/bawah (kiri → atas, kanan → bawah).
+  - kiri/kanan: pusat 30% dari tepi;
+  - atas/bawah: pusat 32% dari tepi, supaya tetap di dalam area jeda yang kosong.
 
-  Ukuran bentuk = fraksi viewport, jadi tetap pas di rasio layar apa pun.
-- **Tata letak** (`global.css`, hanya CSS, urutan DOM tetap):
-  - ≥ 1024px: konten section bergeser ke sisi berlawanan dari bentuk, lebar 58%.
-    Bentuk atas/bawah → konten penuh dengan kartu;
-  - < 1024px: konten diberi kartu `surface` 86% tanpa blur;
-  - tanpa WebGL: tata letak biasa (`data-pointfield="off"` di `<html>`).
+  Ukuran bentuk = fraksi viewport (≥ 1024px dari tinggi, di bawahnya dari lebar).
+- **Interaksi pointer di canvas** (listener pasif di `window`; canvas tetap `pointer-events: none`):
+  - parallax: kamera miring maks. ±0.06 rad mengikuti pointer, memudar 2 detik setelah pointer
+    diam;
+  - medan dorong: titik di sekitar kursor terdorong menjauh. Perpindahan stateless, fungsi jarak
+    di ruang layar; titik bentuk hanya 25% supaya bentuk tidak rusak;
+  - riak: klik (mouse) atau tap (sentuh) memancarkan gelombang radial yang meredam, maks. 3
+    bersamaan;
+  - sentuh: dorong selama jari menyentuh (touch events pasif, tidak menghalangi scroll), tanpa
+    parallax;
+  - drag putar (mouse/pen): saat bentuk tampil di jeda, klik tahan lalu geser di area kosong untuk
+    memutar bentuk. Rotasinya gaya trackball di sumbu layar, dengan inersia setelah dilepas.
+    Kursor berubah grab/grabbing. Tidak aktif di atas isi section, tautan, atau tombol, di
+    sentuhan, dan saat reduced motion. Rotasi di-reset saat ganti bentuk.
 
 Semua parameter ada di satu file, **`src/config/pointfield.ts`** (`POINTFIELD_DEFAULTS`):
 
@@ -147,34 +164,37 @@ Semua parameter ada di satu file, **`src/config/pointfield.ts`** (`POINTFIELD_DE
 | `revolutionVariation` | 0.25 | variasi acak kecepatan per titik (±) |
 | `revolutionTiltX`, `revolutionTiltZ` | 0.35, 0.15 | kemiringan bidang putar (radian) |
 | `wobbleAmplitude`, `wobbleSpeed` | 0.12, 0.6 | gerak halus per titik |
-| `cameraFar` / `cameraNear` | 16 / 7 | jarak kamera dari pusat saat zoom-out netral / zoom-in |
+| `cameraFar` / `cameraNear` | 16 / 7 | jarak kamera dari pusat: netral / zoom-in penuh |
 | `sideShift`, `sideLook` | 1.5, 2 | kamera bergeser dan menengok ke arah sisi saat zoom-in |
-| `holdDrift` | 0.05 | drift yaw kamera selama fase tahan (radian) |
-| `phaseEnter`, `phaseRelease` | 0.2, 0.22 | fraksi progres section untuk fase masuk dan lepas |
+| `holdDrift` | 0.04 | drift yaw kamera selama fase tahan (radian) |
+| `phaseFormEnd`, `phaseHoldEnd` | 0.35, 0.6 | batas fase di jeda: zoom-in/bentuk, tahan, lalu lepas/zoom-out |
 | `shapeDepth` | 10 | jarak bentuk di depan kamera zoom-in |
-| `shapeSizeWide` / `shapeSizeBand` | 0.36 / 0.3 | diameter bentuk kiri/kanan dan atas/bawah (× tinggi viewport) |
+| `shapeSizeWide` / `shapeSizeBand` | 0.36 / 0.26 | diameter bentuk kiri/kanan dan atas/bawah/sudut (× tinggi viewport, ≥ 1024px) |
 | `shapeSizeNarrow` | 0.48 | diameter bentuk di layar < 1024px (× lebar, maks. `shapeSizeBand` × tinggi) |
-| `sideOffsetX`, `bandOffsetY`, `narrowBandOffsetY` | 0.3, 0.24, 0.25 | pusat bentuk dari tepi layar |
+| `sideOffsetX`, `bandOffsetY` | 0.3, 0.32 | pusat bentuk dari tepi kiri/kanan dan atas/bawah |
 | `shapeSpin` | 0.18 | rotasi lokal bentuk (rad/detik) |
 | `shapeTiltY`, `shapeTiltX` | 0.7, 0.38 | kemiringan dasar bentuk (radian) |
 | `morphSpeed`, `delaySpread` | 1.5, 0.3 | morph: `w = smoothstep(m·speed − delay·spread)`; selisih ≥ 1 agar morph penuh |
+| `parallaxStrength`, `parallaxSmoothing` | 0.06, 0.06 | parallax kamera (radian, kehalusan per frame) |
+| `pushRadius`, `pushStrength` | 0.32, 0.06 | medan dorong: radius dan perpindahan maks. (NDC, tinggi layar = 2) |
+| `pushShapeFactor` | 0.25 | pengali dorong/riak untuk titik bentuk |
+| `rippleSpeed`, `rippleStrength`, `rippleWidth`, `rippleDamping` | 1.4, 0.05, 0.12, 1.6 | riak: kecepatan (NDC/detik), kekuatan, lebar gelombang, redaman (1/detik) |
+| `dragSensitivity`, `dragInertia` | 0.008, 0.93 | drag putar bentuk: radian per px, kecepatan tersisa per frame setelah dilepas |
 | `matParallax` | 0.1 | parallax cutting mat (0 = mati) |
 | `yaw`, `pitch` | 8 entri | arah pandang netral per section |
-| `sides` | 7 entri | sisi bentuk section 2..8 |
+| `sides` | 7 entri | sisi bentuk per jeda |
 
 Konstanta yang tidak di-tuning ada di file yang sama:
 
 | Konstanta | Isi |
 |---|---|
-| `WIDE_QUERY` | batas 1024px |
-| `GAP_HEIGHT` | tinggi celah: 30vh desktop, 25svh mobile |
+| `BREAK_HEIGHT` | tinggi jeda: 70vh desktop, 60svh mobile |
+| `WIDE_QUERY` | batas 1024px untuk ukuran bentuk |
 | `GEOMETRY_SEED` | seed acak geometri |
 | `MAX_POINT_PX` | batas ukuran titik di layar |
 | `SETTLE` | bentuk setengah jadi diselesaikan setelah scroll diam 450 ms |
+| `POINTER` | pointer memudar setelah 2 dtk diam, maks. 3 riak, batas tap |
 | `MAX_PIXEL_RATIO`, `FOV`, `COLOR_TOKENS` | batas devicePixelRatio, field of view, token warna titik |
-
-Lebar konten yang digeser (`--side-content-width`, 58%) dan alfa kartu (`--side-card-alpha`, 86%)
-ada di `src/styles/global.css`.
 
 ### Panel tuning (khusus dev)
 
@@ -182,12 +202,13 @@ Buka dev server dengan **`?tune`**, mis. `http://localhost:5173/?tune`.
 
 - Panel muncul di pojok kanan bawah. Bisa diciutkan dengan tombol atau Esc.
 - Isinya:
-  - slider dan input angka untuk tiap parameter (revolusi, kamera, fase, bentuk, titik);
-  - tabel per section: dropdown sisi bentuk (section 2..8), yaw, dan pitch;
-  - indikator: elemen aktif, T, fase (masuk/tahan/lepas), intensitas m, bentuk yang dimuat,
-    N, dan mode lebar.
-- Perubahan langsung terlihat, termasuk pergeseran konten saat sisi diganti. Jumlah titik dan
-  radius field membangun ulang geometri dengan jeda 300 ms; parameter lain hanya mengubah uniform.
+  - slider dan input angka untuk tiap parameter (revolusi, kamera, fase jeda, bentuk, pointer,
+    titik);
+  - tabel per section: yaw/pitch netral dan dropdown sisi bentuk di jeda sesudahnya;
+  - indikator: elemen aktif, T, fase, intensitas m, bentuk yang dimuat, keaktifan pointer,
+    jumlah riak, N, dan mode lebar.
+- Jumlah titik dan radius field membangun ulang geometri dengan jeda 300 ms; parameter lain hanya
+  mengubah uniform.
 - Nilai disimpan sementara di localStorage (`inapr-tune`) supaya tidak hilang saat refresh.
   "Reset" kembali ke default dan menghapus nilai tersimpan.
 - "Salin nilai" menyalin objek `POINTFIELD_DEFAULTS` (termasuk `sides`) siap tempel ke
@@ -196,8 +217,8 @@ Buka dev server dengan **`?tune`**, mis. `http://localhost:5173/?tune`.
   ikut bundel produksi. Panel ditata dengan `src/dev/tune.css` (kelas `tp-*`), bukan Tailwind:
   `global.css` memakai `@source not "../dev"`, jadi CSS produksi tidak berisi kelas panel.
 - Di dev server, `window.__inaprPointField.debug()` memberi T, fase, morph, bentuk, posisi bentuk
-  di layar (NDC), N, versi geometri, dan warna titik. Ini untuk skrip pengujian dan tidak ada di
-  produksi.
+  di layar (NDC), keaktifan pointer, riak, N, versi geometri, dan warna titik. Ini untuk skrip
+  pengujian dan tidak ada di produksi.
 
 Catatan engine:
 
@@ -210,42 +231,53 @@ Catatan engine:
 - Intensitas bentuk I menggerakkan morph dan zoom kamera sekaligus. Ganti bentuk hanya terjadi
   saat bentuk lama sudah lepas penuh (I = 0); `aTarget` di-upload ulang hanya saat itu.
 - Penanganan kasus rawan:
-  - **Klik tautan `#…` yang jauh** (lebih dari satu elemen): T langsung pindah ke awal section
-    tujuan dan ditahan selama scroll native berjalan. Hanya bentuk tujuan yang dimuat, lalu
-    bentuk itu terbentuk halus.
+  - **Klik tautan `#…` yang jauh** (lebih dari satu elemen): T langsung pindah ke section tujuan
+    (netral) dan ditahan sampai scroll native benar-benar dekat tujuan (atau 2,5 detik). Bentuk
+    di jeda yang dilewati tidak dimuat.
   - **Lompatan instan** lebih dari 1,5 elemen: T langsung disamakan, tanpa menyapu bentuk.
-  - **Scroll berhenti di tengah fase masuk/lepas:** setelah 450 ms diam, bentuk diselesaikan ke
-    keadaan terdekat (utuh atau lepas). Tidak ada bentuk setengah jadi yang tersangkut.
+  - **Scroll berhenti di tengah jeda:** setelah 450 ms diam, bentuk diselesaikan:
+    - di fase lepas selalu ke lepas;
+    - di fase masuk ke keadaan terdekat.
+
+    Tidak ada bentuk setengah jadi yang tersangkut.
   - **Resize/rotasi:** posisi scroll dikembalikan ke progres relatif yang sama; posisi bentuk
     dihitung ulang. Tinggi viewport diambil dari `clientHeight`, jadi bar alamat mobile tidak
     menggeser T.
   - **Ganti tema:** warna titik memudar 200 ms tanpa membangun ulang geometri.
-- `prefers-reduced-motion`: tanpa revolusi dan tanpa gerak kamera. Bintang statis, dan bentuk
-  section aktif tampil statis di sisinya tanpa transisi (di celah: bentuk section sebelumnya).
+- `prefers-reduced-motion`: tanpa revolusi, tanpa gerak kamera, tanpa interaksi pointer.
+  Bintang statis; di jeda, bentuknya tampil statis di sisinya tanpa transisi.
 - three.js baru diunduh setelah event `load` dan saat browser senggang (`PointField.tsx`), di dalam
-  error boundary. Bila tanpa WebGL, saat error, atau saat context hilang, yang tampil hanya latar
-  cutting mat, dan konten kembali ke tata letak biasa.
+  error boundary. Bila tanpa WebGL, saat error, atau saat context hilang, canvas disembunyikan dan
+  yang tampil hanya latar cutting mat.
 
 Kontrak DOM antara halaman dan engine:
 
-- Urutan scroll = urutan DOM `[data-section]` (0..7) dan `[data-gap]` (0..6, `SectionGap`).
-- Section 2..8 membawa `data-shape-side`. Nilai awalnya dari config (SSR/prerender); engine
-  memperbaruinya bila parameter berubah. Konten section dibungkus `[data-section-body]`.
+- Urutan scroll = urutan DOM `[data-section]` (0..7) dan `[data-break]` (0..6).
 - Engine men-set `--mat-offset` di `<main>` untuk parallax cutting mat.
 
 ## Animasi mikro
 
 Semua animasi menghormati `prefers-reduced-motion` (mati atau instan). Selain transisi warna saat
-ganti tema, semuanya hanya menganimasikan transform dan opacity.
+ganti tema, semuanya hanya menganimasikan transform dan opacity, tanpa layout shift. Efek hover
+hanya aktif di `(hover: hover) and (pointer: fine)`, dan tiap efek punya padanan
+`:focus-visible`.
 
 | Animasi | Di mana |
 |---|---|
 | Reveal saat scroll: fade + naik 16px, stagger 45ms | `src/hooks/useReveal.ts` + atribut `data-reveal`; CSS di `global.css` |
 | Bayangan navbar setelah scroll; garis indikator menu aktif yang bergeser (≥ 768px) | `src/components/Navbar.tsx` |
+| Bilah progres scroll 2px (accent) di tepi bawah navbar (`scaleX`) | `src/components/Navbar.tsx` |
+| Rel titik navigasi di tepi kanan (≥ 1280px): titik aktif, tooltip nama section saat hover/fokus, bisa diklik dan diakses keyboard | `src/components/SectionRail.tsx` |
 | Tombol naik 2px saat hover/fokus (150ms). Kartu hanya naik bila berisi tautan/tombol (kartu webinar dengan "Tonton"/"Slide"); kartu lain statis | `buttonBase`, `cardLift` di `src/lib/ui.ts` |
+| Tombol utama/CTA: magnetik (geser maks. 6px ke arah kursor) dan riak dari titik klik (keyboard: dari tengah) | kelas `fx-magnetic`, `fx-ripple` di `buttonPrimary`; `src/hooks/usePointerFx.ts` + `global.css` |
+| Sorotan radial mengikuti kursor (`--mx`/`--my`) pada kartu interaktif saja; muncul juga saat fokus keyboard di dalam kartu | kelas `fx-spotlight` di `cardLift`; `usePointerFx.ts` + `global.css` |
+| Tombol tema: ikon matahari/bulan berputar + crossfade 200ms. Toggle bahasa: thumb aktif meluncur (`transform`). Keduanya umpan balik tekan `scale(0.97)` | `src/components/ThemeToggle.tsx`, `src/components/SegmentedToggle.tsx` |
 | Transisi warna 200ms saat ganti tema | `src/hooks/useTheme.ts` + `.theme-transition` |
 | Crossfade 200ms saat ganti bahasa (View Transitions API) | `src/components/LangToggle.tsx` |
 | Angka statistik menghitung naik (1,2 detik) | `src/components/CountUp.tsx` (di Tentang) |
+
+Handler pointer (`usePointerFx`, bilah progres) memakai listener pasif dan diterapkan sekali per
+`requestAnimationFrame`.
 
 Reveal aman tanpa JS: elemen hanya disembunyikan bila hook memasang `data-reveal-pending`. Elemen
 yang sudah terlihat saat halaman dibuka tidak dianimasikan. Untuk menambah reveal pada blok baru,

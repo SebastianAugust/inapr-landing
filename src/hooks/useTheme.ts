@@ -2,19 +2,20 @@ import { useSyncExternalStore } from 'react'
 import { prefersReducedMotion } from '@/lib/motion'
 import { storageGet, storageSet } from '@/lib/storage'
 
-export type ThemePreference = 'light' | 'dark' | 'system'
-export type ResolvedTheme = 'light' | 'dark'
+export type Theme = 'light' | 'dark'
 
 interface ThemeState {
-  preference: ThemePreference
-  resolved: ResolvedTheme
+  /** Tema yang sedang tampil. */
+  resolved: Theme
+  /** true = pengguna pernah menekan tombol tema (pilihan tersimpan); false = ikut sistem. */
+  explicit: boolean
 }
 
 /** Harus sama dengan script anti-flash di index.html. */
 const STORAGE_KEY = 'inapr-theme'
 const DARK_QUERY = '(prefers-color-scheme: dark)'
 
-function systemTheme(): ResolvedTheme {
+function systemTheme(): Theme {
   try {
     return window.matchMedia(DARK_QUERY).matches ? 'dark' : 'light'
   } catch {
@@ -22,24 +23,30 @@ function systemTheme(): ResolvedTheme {
   }
 }
 
-function readPreference(): ThemePreference {
+/** Pilihan eksplisit tersimpan. Nilai lain (termasuk 'system' dari versi lama) = ikut sistem. */
+function readSaved(): Theme | null {
   const saved = storageGet(STORAGE_KEY)
-  return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system'
+  return saved === 'light' || saved === 'dark' ? saved : null
 }
 
-function resolve(preference: ThemePreference): ThemeState {
-  return { preference, resolved: preference === 'system' ? systemTheme() : preference }
+function initialState(): ThemeState {
+  const saved = readSaved()
+  return saved ? { resolved: saved, explicit: true } : { resolved: systemTheme(), explicit: false }
 }
 
 const IS_BROWSER = typeof document !== 'undefined'
-/** Dipakai saat prerender (tanpa DOM). */
-const SERVER_STATE: ThemeState = { preference: 'system', resolved: 'light' }
+/** Dipakai saat prerender (tanpa DOM). Ikon tombol tetap benar karena dipilih lewat CSS data-theme. */
+const SERVER_STATE: ThemeState = { resolved: 'light', explicit: false }
 
-let state: ThemeState = IS_BROWSER ? resolve(readPreference()) : SERVER_STATE
+/**
+ * Sesi tanpa localStorage: pilihan tetap disimpan di memori (state.explicit), jadi tombol
+ * berfungsi dan perubahan tema sistem diabaikan sampai halaman dimuat ulang.
+ */
+let state: ThemeState = IS_BROWSER ? initialState() : SERVER_STATE
 const listeners = new Set<() => void>()
 
 /** Terapkan tema ke <html> dan samakan warna bilah browser (meta theme-color) dengan --bg. */
-function applyDocument(resolved: ResolvedTheme): void {
+function applyDocument(resolved: Theme): void {
   const root = document.documentElement
   root.setAttribute('data-theme', resolved)
   const bg = getComputedStyle(root).getPropertyValue('--bg').trim()
@@ -76,8 +83,9 @@ function commit(next: ThemeState): void {
   listeners.forEach((listener) => listener())
 }
 
+/** Tema sistem berubah: ikut langsung, selama pengguna belum memilih sendiri. */
 function onSystemChange(): void {
-  if (state.preference === 'system') commit(resolve('system'))
+  if (!state.explicit) commit({ resolved: systemTheme(), explicit: false })
 }
 
 let media: MediaQueryList | null = null
@@ -109,16 +117,15 @@ function getServerSnapshot(): ThemeState {
   return SERVER_STATE
 }
 
-export function setThemePreference(preference: ThemePreference): void {
-  storageSet(STORAGE_KEY, preference)
-  commit(resolve(preference))
+/** Tombol tema: ganti Terang ↔ Gelap dari tema yang sedang tampil, lalu simpan sebagai pilihan eksplisit. */
+export function toggleTheme(): void {
+  const next: Theme = state.resolved === 'dark' ? 'light' : 'dark'
+  storageSet(STORAGE_KEY, next)
+  commit({ resolved: next, explicit: true })
 }
 
-/**
- * Tema aktif. `preference` = pilihan pengguna (Terang/Gelap/Sistem),
- * `resolved` = tema yang benar-benar dipakai (selalu light/dark).
- */
+/** Tema yang sedang tampil (`resolved`) dan apakah itu pilihan pengguna (`explicit`). */
 export function useTheme() {
   const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
-  return { ...current, setPreference: setThemePreference }
+  return { ...current, toggle: toggleTheme }
 }

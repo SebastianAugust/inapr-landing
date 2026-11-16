@@ -108,6 +108,40 @@
 }
 
 /*
+ * Drag putar bentuk titik 3D (src/pointfield/engine.ts memasang kelas di <html>):
+ * pf-grab = pointer di area kosong saat bentuk tampil; pf-grabbing = sedang di-drag
+ * (seleksi teks dimatikan selama drag).
+ */
+html.pf-grab main {
+  cursor: grab;
+}
+html.pf-grabbing,
+html.pf-grabbing * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+/*
+ * Tombol tema (src/components/ThemeToggle.tsx): ikon = tema yang AKTIF (matahari = Terang,
+ * bulan = Gelap). Dipilih dari data-theme di <html> (di-set sebelum render), jadi benar
+ * sejak paint pertama. Berganti dengan putar + skala + crossfade ±200ms; instan saat
+ * reduced motion (aturan di @layer base).
+ */
+.theme-icon {
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
+}
+:root[data-theme='dark'] .theme-icon-sun {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.5);
+}
+:root:not([data-theme='dark']) .theme-icon-moon {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.5);
+}
+
+/*
  * ---- Animasi mikro ----
  * Semua di balik prefers-reduced-motion: no-preference; hanya opacity/transform,
  * kecuali transisi warna saat ganti tema (permintaan eksplisit).
@@ -138,9 +172,9 @@
     transition-timing-function: ease-out !important;
     transition-delay: 0ms !important;
   }
-  /* Thumb toggle (SegmentedToggle) tetap meluncur saat tema berganti. */
-  html.theme-transition [data-toggle-thumb] {
-    transition-property: transform, background-color !important;
+  /* Ikon tombol tema tetap berputar + crossfade saat tema berganti. */
+  html.theme-transition .theme-icon {
+    transition-property: opacity, transform, stroke !important;
   }
 
   /* Ganti bahasa (src/components/LangToggle.tsx): crossfade View Transitions. */

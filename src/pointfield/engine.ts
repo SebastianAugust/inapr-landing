@@ -10,6 +10,8 @@
  * - Interaksi pointer (listener pasif di window; canvas tetap pointer-events: none):
  *   parallax kamera, medan dorong kursor, dan riak klik/tap. Dorong dan riak dihitung di
  *   GPU dari uniform posisi pointer dan slot riak (maks. 3), tanpa simulasi.
+ * - Drag mouse di area kosong saat bentuk tampil memutar bentuk (trackball di sumbu layar,
+ *   dengan inersia). Rotasi digabung ke uniform uShapeRot; tanpa alokasi per frame.
  * - Posisi bentuk di dunia dihitung dari proyeksi pose kamera zoom-in (unproject titik
  *   layar sasaran), jadi bentuk mendarat di sisi viewport yang benar untuk rasio apa pun.
  * - Posisi bentuk tujuan (aTarget) di-upload ulang hanya saat ganti bentuk, dan hanya
@@ -30,6 +32,7 @@ import {
   Matrix4,
   PerspectiveCamera,
   Points,
+  Quaternion,
   Scene,
   ShaderMaterial,
   Vector2,
@@ -80,6 +83,8 @@ export interface PointFieldDebug {
   /** Keaktifan pointer 0..1 (parallax + medan dorong) dan jumlah riak aktif. */
   pointer: number
   ripples: number
+  /** Sedang memutar bentuk dengan drag mouse. */
+  dragging: boolean
   reducedMotion: boolean
   /** Naik setiap kali geometri dibangun (untuk memastikan ganti tema tidak membangun ulang). */
   geometryVersion: number
@@ -250,7 +255,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     uPushRadius: { value: params.pushRadius },
     uPushStrength: { value: params.pushStrength },
     uPushShape: { value: params.pushShapeFactor },
-    uRipples: { value: [new Vector4(), new Vector4(), new Vector4()] },
+    // w = amplitudo; 0 = slot kosong (Vector4 bawaan three.js ber-w 1, jadi diisi eksplisit).
+    uRipples: { value: [new Vector4(0, 0, 0, 0), new Vector4(0, 0, 0, 0), new Vector4(0, 0, 0, 0)] },
     uRippleSpeed: { value: params.rippleSpeed },
     uRippleStrength: { value: params.rippleStrength },
     uRippleWidth: { value: params.rippleWidth },
@@ -286,6 +292,12 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   const vDir = new Vector3()
   const euler = new Euler()
   const matrix = new Matrix4()
+  const dragMatrix = new Matrix4()
+  /** Rotasi hasil drag pengguna (di-reset saat ganti bentuk) + langkah rotasi per frame. */
+  const dragRotation = new Quaternion()
+  const dragStep = new Quaternion()
+  const vScreenUp = new Vector3()
+  const vScreenRight = new Vector3()
 
   // ---- Urutan scroll dari DOM ----
   const seq: SeqItem[] = Array.from(
@@ -328,6 +340,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   let navigating = false
   let navIdleTimer = 0
   let navMaxTimer = 0
+  /** Indeks elemen tujuan navigasi (lihat onClick). */
+  let navIndex = 0
   /** Transisi warna tema: dari → ke, mulai (ms) atau -1 bila tidak aktif. */
   const colorFrom = [new Color(), new Color(), new Color()] as const
   const colorTo = [new Color(), new Color(), new Color()] as const
@@ -357,6 +371,18 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   let touchLastX = 0
   let touchLastY = 0
   let rippleSlot = 0
+  // ---- Drag putar bentuk (mouse/pen) ----
+  let dragging = false
+  let dragLastX = 0
+  let dragLastY = 0
+  /** Pergeseran pointer (px) sejak frame terakhir, dan kecepatan sudut (rad per frame 60 fps). */
+  let dragDeltaX = 0
+  let dragDeltaY = 0
+  let dragVelX = 0
+  let dragVelY = 0
+  /** Pointer terakhir berada di area kosong yang boleh di-drag; kelas kursor di <html>. */
+  let hoverDraggable = false
+  let cursorClass = ''
 
   /** Uniform yang hanya bergantung pada parameter (bukan per frame). */
   function applyParamUniforms(): void {
@@ -518,13 +544,79 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     targetAttribute.needsUpdate = true
     currentShape = index
     anchorDirty = true
+    // Bentuk baru mulai dari orientasi dasarnya.
+    dragRotation.identity()
+    dragVelX = 0
+    dragVelY = 0
   }
 
-  /** Rotasi lokal bentuk: kemiringan dasar + putaran pelan di sumbu vertikal bentuk. */
+  /**
+   * Rotasi lokal bentuk: kemiringan dasar + putaran pelan di sumbu vertikal bentuk, lalu
+   * rotasi hasil drag pengguna (di sumbu layar) di atasnya.
+   */
   function updateShapeRotation(): void {
     const spin = reduce ? 0 : time * params.shapeSpin
     euler.set(params.shapeTiltX, params.shapeTiltY + spin, 0, 'XYZ')
-    uniforms.uShapeRot.value.setFromMatrix4(matrix.makeRotationFromEuler(euler))
+    matrix.makeRotationFromEuler(euler)
+    if (!reduce) matrix.premultiply(dragMatrix.makeRotationFromQuaternion(dragRotation))
+    uniforms.uShapeRot.value.setFromMatrix4(matrix)
+  }
+
+  /**
+   * Drag putar: geser horizontal = putar di sumbu vertikal layar, geser vertikal = putar di
+   * sumbu horizontal layar (trackball). Setelah dilepas, kecepatan meredam (dragInertia).
+   */
+  function stepDrag(step: number): void {
+    let angleX: number
+    let angleY: number
+    if (dragging) {
+      angleX = dragDeltaX * params.dragSensitivity
+      angleY = dragDeltaY * params.dragSensitivity
+      dragDeltaX = 0
+      dragDeltaY = 0
+      // Kecepatan per frame 60 fps (konsisten di 60/120 Hz) untuk inersia saat dilepas.
+      dragVelX = angleX / Math.max(step, 0.25)
+      dragVelY = angleY / Math.max(step, 0.25)
+    } else {
+      const keep = Math.min(0.999, Math.max(0, params.dragInertia)) ** step
+      dragVelX *= keep
+      dragVelY *= keep
+      if (Math.abs(dragVelX) + Math.abs(dragVelY) < 0.00002) {
+        dragVelX = 0
+        dragVelY = 0
+        return
+      }
+      angleX = dragVelX * step
+      angleY = dragVelY * step
+    }
+    if (angleX === 0 && angleY === 0) return
+    vScreenUp.set(0, 1, 0).applyQuaternion(camera.quaternion)
+    vScreenRight.set(1, 0, 0).applyQuaternion(camera.quaternion)
+    dragRotation.premultiply(dragStep.setFromAxisAngle(vScreenUp, angleX))
+    dragRotation.premultiply(dragStep.setFromAxisAngle(vScreenRight, angleY))
+    dragRotation.normalize()
+  }
+
+  /** Area yang boleh memulai drag: latar kosong di dalam <main> (jeda), bukan isi section/kontrol. */
+  function isDragSurface(target: EventTarget | null): boolean {
+    if (!(target instanceof Element) || !target.closest('main')) return false
+    return !target.closest(
+      'a, button, input, select, textarea, label, summary, [contenteditable], [data-section]',
+    )
+  }
+
+  function canDrag(): boolean {
+    return !reduce && currentShape >= 0 && intensity >= POINTER.dragMinMorph
+  }
+
+  /** Kursor grab/grabbing di <html> (global.css), hanya diubah bila berbeda. */
+  function updateCursor(): void {
+    const next = dragging ? 'pf-grabbing' : hoverDraggable && canDrag() ? 'pf-grab' : ''
+    if (next === cursorClass) return
+    const root = document.documentElement
+    if (cursorClass) root.classList.remove(cursorClass)
+    if (next) root.classList.add(next)
+    cursorClass = next
   }
 
   function updateMat(): void {
@@ -601,6 +693,11 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   /** Mode gerak dikurangi: bintang dan bentuk statis, tanpa revolusi dan tanpa gerak kamera. */
   function applyMotionMode(): void {
     matOffset = Number.NaN
+    // Reduced motion: tanpa interaksi pointer di canvas, termasuk drag putar.
+    dragging = false
+    dragVelX = 0
+    dragVelY = 0
+    updateCursor()
     if (reduce) mat?.style.removeProperty('--mat-offset')
     T = scrollTarget(tops, heights, seq.length)
     anchorDirty = true
@@ -669,11 +766,12 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     computeFrame(T, seq, state, params)
 
     // Intensitas tujuan. Bentuk lain masih tampil → lepas dulu sampai 0, baru ganti bentuk.
-    // Scroll diam → bentuk setengah jadi diselesaikan ke keadaan terdekat (utuh / lepas).
+    // Scroll diam → bentuk setengah jadi diselesaikan: di fase lepas selalu ke lepas (kamera
+    // sudah berbelok ke section berikut); di fase masuk ke keadaan terdekat (utuh / lepas).
     const idle = !navigating && T === target && now - lastScrollAt > SETTLE.idleMs
     let goal = 0
     if (state.shape >= 0 && state.shape === currentShape) {
-      goal = idle ? (state.intensity >= 0.5 ? 1 : 0) : state.intensity
+      goal = idle ? (!state.releasing && state.intensity >= 0.5 ? 1 : 0) : state.intensity
     }
     const rate = idle ? SETTLE.rate : SETTLE.scrollRate
     intensity += (goal - intensity) * (1 - (1 - rate) ** step)
@@ -686,6 +784,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
 
     // Kamera: zoom mengikuti intensitas; drift sangat halus selama fase tahan; parallax pointer.
     stepPointer(now, step)
+    stepDrag(step)
+    updateCursor()
     const e = intensity
     const drift = state.shape === currentShape ? params.holdDrift * (state.hold - 0.5) * e : 0
     const side = currentShape >= 0 ? 1 : 0
@@ -714,8 +814,13 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
 
   // ---- Navigasi anchor jauh (klik menu navbar, footer, dst.) ----
 
-  function endNavigation(): void {
+  /**
+   * Akhiri mode navigasi. Kecuali dipaksa (batas waktu), hanya bila posisi scroll sudah
+   * dekat elemen tujuan: scroll yang belum sampai tidak membuat T menyapu jeda di antaranya.
+   */
+  function endNavigation(force = false): void {
     if (!navigating) return
+    if (force !== true && Math.abs(scrollTarget(tops, heights, seq.length) - navIndex) > 1.2) return
     navigating = false
     window.clearTimeout(navIdleTimer)
     window.clearTimeout(navMaxTimer)
@@ -747,12 +852,13 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     const index = seq.findIndex((item) => item.el === dest || item.el.contains(dest))
     if (index < 0 || Math.abs(index - Math.floor(T)) <= 1) return
     navigating = true
+    navIndex = index
     T = index
     window.clearTimeout(navIdleTimer)
     window.clearTimeout(navMaxTimer)
     // Bila scroll tidak terjadi (sudah di tujuan) → selesai setelah jeda idle.
     navIdleTimer = window.setTimeout(endNavigation, SCROLL_IDLE_MS * 2)
-    navMaxTimer = window.setTimeout(endNavigation, NAV_MAX_MS)
+    navMaxTimer = window.setTimeout(() => endNavigation(true), NAV_MAX_MS)
     schedule()
   }
 
@@ -841,17 +947,45 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     pointerInside = true
     lastPointerAt = performance.now()
     setPointer(event.clientX, event.clientY)
+    hoverDraggable = isDragSurface(event.target)
+    if (dragging) {
+      dragDeltaX += event.clientX - dragLastX
+      dragDeltaY += event.clientY - dragLastY
+      dragLastX = event.clientX
+      dragLastY = event.clientY
+    }
     if (!reduce) schedule()
   }
+  // Tidak pasif: preventDefault hanya saat drag dimulai (mencegah seleksi teks), tidak
+  // pernah untuk sentuhan, jadi scroll native tidak terhalang.
   const onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === 'touch' || event.button !== 0) return
     pointerTouch = false
     setPointer(event.clientX, event.clientY)
+    if (canDrag() && isDragSurface(event.target)) {
+      event.preventDefault()
+      dragging = true
+      dragLastX = event.clientX
+      dragLastY = event.clientY
+      dragDeltaX = 0
+      dragDeltaY = 0
+      updateCursor()
+      schedule()
+      return
+    }
     addRipple()
+  }
+  const onPointerUp = () => {
+    if (!dragging) return
+    dragging = false
+    updateCursor()
   }
   const onPointerOut = (event: PointerEvent) => {
     // relatedTarget null = pointer keluar dari jendela.
-    if (event.pointerType !== 'touch' && !event.relatedTarget) pointerInside = false
+    if (event.pointerType !== 'touch' && !event.relatedTarget) {
+      pointerInside = false
+      hoverDraggable = false
+    }
   }
   // Sentuhan lewat touch events (tetap terkirim selama browser menggulir, berbeda dengan
   // pointer events yang dibatalkan): dorong selama jari menyentuh, riak saat tap.
@@ -891,7 +1025,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   if (content) resizeObserver.observe(content)
 
   window.addEventListener('scroll', onScroll, { passive: true })
-  window.addEventListener('scrollend', endNavigation)
+  const onScrollEnd = () => endNavigation()
+  window.addEventListener('scrollend', onScrollEnd)
   document.addEventListener('click', onClick)
   window.addEventListener('resize', onResize)
   document.addEventListener('visibilitychange', onVisibility)
@@ -899,7 +1034,10 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   wideQuery.addEventListener('change', onWideChange)
   canvas.addEventListener('webglcontextlost', onContextLost)
   window.addEventListener('pointermove', onPointerMove, passive)
-  window.addEventListener('pointerdown', onPointerDown, passive)
+  window.addEventListener('pointerdown', onPointerDown, { passive: false })
+  window.addEventListener('pointerup', onPointerUp, passive)
+  window.addEventListener('pointercancel', onPointerUp, passive)
+  window.addEventListener('blur', onPointerUp)
   window.addEventListener('pointerout', onPointerOut, passive)
   window.addEventListener('touchstart', onTouchStart, passive)
   window.addEventListener('touchmove', onTouchMove, passive)
@@ -920,7 +1058,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     window.clearTimeout(navIdleTimer)
     window.clearTimeout(navMaxTimer)
     window.removeEventListener('scroll', onScroll)
-    window.removeEventListener('scrollend', endNavigation)
+    window.removeEventListener('scrollend', onScrollEnd)
     document.removeEventListener('click', onClick)
     window.removeEventListener('resize', onResize)
     document.removeEventListener('visibilitychange', onVisibility)
@@ -929,7 +1067,11 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     canvas.removeEventListener('webglcontextlost', onContextLost)
     window.removeEventListener('pointermove', onPointerMove)
     window.removeEventListener('pointerdown', onPointerDown)
+    window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
+    window.removeEventListener('blur', onPointerUp)
     window.removeEventListener('pointerout', onPointerOut)
+    if (cursorClass) document.documentElement.classList.remove(cursorClass)
     window.removeEventListener('touchstart', onTouchStart)
     window.removeEventListener('touchmove', onTouchMove)
     window.removeEventListener('touchend', onTouchEnd)
@@ -978,6 +1120,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
         wide,
         pointer: pointerActivity,
         ripples: activeRipples(),
+        dragging,
         reducedMotion: reduce,
         geometryVersion,
         colors: colors.map((color) => color.getHexString()),

@@ -72,8 +72,8 @@ export interface Dictionary {
     cta: string
     openMenu: string
     closeMenu: string
-    themeLabel: string
-    themes: { light: string; dark: string; system: string }
+    /** Nama tombol tema (aria-label), menyebut aksi: ke mode lawan dari yang tampil. */
+    theme: { toDark: string; toLight: string }
     langLabel: string
   }
   tentang: {

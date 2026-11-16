@@ -30,10 +30,12 @@ export interface FrameState {
   intensity: number
   /** Progres fase tahan (0..1), untuk drift kamera. 0.5 di luar fase tahan. */
   hold: number
+  /** Sedang di fase LEPAS + ZOOM OUT. */
+  releasing: boolean
 }
 
 export function createFrameState(params: Pick<PointFieldParams, 'yaw' | 'pitch'>): FrameState {
-  return { item: 0, progress: 0, yaw: params.yaw[0], pitch: params.pitch[0], shape: -1, intensity: 0, hold: 0.5 }
+  return { item: 0, progress: 0, yaw: params.yaw[0], pitch: params.pitch[0], shape: -1, intensity: 0, hold: 0.5, releasing: false }
 }
 
 export function smoothstep(a: number, b: number, x: number): number {
@@ -78,6 +80,7 @@ export function computeFrame(T: number, seq: readonly SeqItem[], out: FrameState
   out.item = i
   out.progress = f
   out.hold = 0.5
+  out.releasing = false
 
   if (!item || item.kind === 'section') {
     // Section: netral, hanya bintang.
@@ -100,5 +103,6 @@ export function computeFrame(T: number, seq: readonly SeqItem[], out: FrameState
   out.shape = item.index
   out.intensity = f < form ? smoothstep(0, form, f) : f <= hold ? 1 : 1 - smoothstep(hold, 1, f)
   out.hold = Math.min(1, Math.max(0, (f - form) / (hold - form)))
+  out.releasing = f > hold
   return out
 }

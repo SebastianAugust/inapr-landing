@@ -11,7 +11,7 @@
     <meta name="color-scheme" content="light dark" />
     <!--
       Warna bilah browser. Nilai = --bg di src/styles/tokens.css (Terang / Gelap).
-      Saat pengguna memilih tema manual, src/hooks/useTheme.ts menyamakan keduanya.
+      Script tema di bawah dan src/hooks/useTheme.ts menyamakan keduanya dengan tema yang tampil.
     -->
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f1e9e4" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#250001" />
@@ -49,13 +49,22 @@
           pref = localStorage.getItem('inapr-theme')
           lang = localStorage.getItem('inapr-lang')
         } catch (e) {}
-        if (pref !== 'light' && pref !== 'dark') pref = 'system'
-        var dark = false
-        try {
-          dark = window.matchMedia('(prefers-color-scheme: dark)').matches
-        } catch (e) {}
-        root.setAttribute('data-theme', pref === 'system' ? (dark ? 'dark' : 'light') : pref)
+        // Pilihan tersimpan ('light'/'dark') menang; selain itu ikut tema sistem.
+        var theme = pref === 'light' || pref === 'dark' ? pref : null
+        if (!theme) {
+          var dark = false
+          try {
+            dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          } catch (e) {}
+          theme = dark ? 'dark' : 'light'
+        }
+        root.setAttribute('data-theme', theme)
         root.setAttribute('lang', lang === 'en' ? 'en' : 'id')
+        // Bilah browser ikut tema yang tampil (nilai = --bg di tokens.css), juga bila
+        // pilihan tersimpan berbeda dari tema sistem.
+        var bar = theme === 'dark' ? '#250001' : '#f1e9e4'
+        var metas = document.querySelectorAll('meta[name="theme-color"]')
+        for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', bar)
       })()
     </script>
 
