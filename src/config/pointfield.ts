@@ -40,15 +40,22 @@ export interface PointFieldParams {
 
   // ---- Scroll di jeda (lihat src/pointfield/wheeldamp.ts dan extendBreaks() di scrollmap.ts) ----
   /**
-   * Peredam roda mouse/trackpad di zona jeda yang diperluas: satu flick tidak melompati seluruh
-   * jeda. Hanya event wheel (bukan sentuhan, keyboard, drag scrollbar); mati saat reduced motion
-   * dan selama navigasi anchor. Di perangkat sentuh swipe cepat TIDAK bisa diredam.
+   * Peredam roda mouse/trackpad di jeda: satu flick tidak melompati bentuk. Berat HANYA saat
+   * bentuk terlihat (lihat dampWeightLow/High); di lead, zoom in awal, zoom out akhir, trail dan
+   * di luar jeda scroll normal. Hanya event wheel (bukan sentuhan, keyboard, drag scrollbar); mati
+   * saat reduced motion dan selama navigasi anchor. Di perangkat sentuh swipe cepat TIDAK bisa diredam.
    */
   scrollDamping: boolean
-  /** Pengali jarak scroll roda di dalam zona jeda (1 = tanpa redam). Rentang uji 0,25–0,7. */
+  /**
+   * Pengali jarak scroll roda saat bentuk terlihat penuh (1 = tanpa redam). Profil:
+   * faktor = lerp(1, scrollDampFactor, w), w = smoothstep(dampWeightLow, dampWeightHigh, m),
+   * m = intensitas jeda di posisi itu (sama dengan animasi). Di luar rentang jeda: 1.
+   */
   scrollDampFactor: number
-  /** Panjang zona transisi (vh) di luar tiap tepi zona: faktor berubah halus dari 1 ke scrollDampFactor. */
-  scrollDampTransitionVh: number
+  /** Intensitas m tempat peredam mulai terasa (w = 0 di bawahnya: scroll normal). */
+  dampWeightLow: number
+  /** Intensitas m tempat peredam penuh (w = 1 di atasnya: faktor = scrollDampFactor). */
+  dampWeightHigh: number
   /**
    * Animasi jeda melebar ke section di sekitarnya (vh): zoom in mulai edgeLeadVh sebelum jeda
    * (akhir section sebelumnya), zoom out selesai edgeTrailVh sesudah jeda (awal section berikut).
@@ -110,8 +117,8 @@ export interface PointFieldParams {
   // ---- Fase di dalam jeda (fraksi progres atas rentang lead + jeda + trail) ----
   /**
    * ZOOM IN + bentuk terbentuk: 0 → phaseFormEnd. TAHAN: phaseFormEnd → phaseHoldEnd. LEPAS +
-   * ZOOM OUT: phaseHoldEnd → 1. Desktop default: 50 + 200 + 50 vh → zoom in ±129vh, tahan ±42vh,
-   * zoom out ±129vh.
+   * ZOOM OUT: phaseHoldEnd → 1. Desktop default: 40 + 180 + 40 vh → zoom in ±112vh, tahan ±36vh,
+   * zoom out ±112vh.
    */
   phaseFormEnd: number
   phaseHoldEnd: number
@@ -216,10 +223,11 @@ export interface PointFieldParams {
 export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   smoothing: 0.28,
   scrollDamping: true,
-  scrollDampFactor: 0.4,
-  scrollDampTransitionVh: 30,
-  edgeLeadVh: 50,
-  edgeTrailVh: 50,
+  scrollDampFactor: 0.5,
+  dampWeightLow: 0.55,
+  dampWeightHigh: 0.9,
+  edgeLeadVh: 40,
+  edgeTrailVh: 40,
   countDesktop: 20000,
   countLowPower: 11000,
   countMobile: 7500,
@@ -296,8 +304,10 @@ export const GEOMETRY_KEYS = [
  * 768px; svh stabil saat bar alamat muncul/menyusut). Tanpa teks; canvas fixed, jadi jeda yang
  * tinggi terasa "berat": animasi menempel ke scroll sepanjang jeda. Ditambah tepi lead/trail
  * (edgeLeadVh/edgeTrailVh) dan peredam roda (scrollDamping) supaya scroll cepat tidak melompatinya.
+ * Setara berat roda dengan default (dampEquivalentVh): desktop 40 + 180 + 40 = 260vh → ±358vh,
+ * mobile 40 + 140 + 40 = 220vh → ±303vh (tanpa batas EDGE di section pendek).
  */
-export const BREAK_HEIGHT = { desktop: 200, mobile: 150 } as const
+export const BREAK_HEIGHT = { desktop: 180, mobile: 140 } as const
 
 /**
  * Tepi animasi jeda (edgeLeadVh/edgeTrailVh): tiap tepi paling banyak maxSectionFraction tinggi

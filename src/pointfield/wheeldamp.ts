@@ -1,17 +1,19 @@
 /**
  * Peredam scroll roda di zona jeda (params.scrollDamping).
  *
- * Tujuan: di zona jeda yang diperluas (lead + jeda + trail), roda mouse/trackpad terasa "berat",
- * jadi satu flick tidak melompati seluruh animasi jeda. Posisi scroll TIDAK PERNAH ditarik ke
+ * Tujuan: saat bentuk jeda terlihat, roda mouse/trackpad terasa "berat", jadi satu flick tidak
+ * melompati bentuknya; di bagian lain (lead, zoom in awal, zoom out akhir, trail, section) scroll
+ * terasa normal. Posisi scroll TIDAK PERNAH ditarik ke
  * mana pun: peredam hanya memperkecil jarak yang ditempuh oleh delta roda yang dikirim pengguna.
  *
  * Cara kerja
  * - Satu listener `wheel` di window ({ passive: false }). Event diambil alih hanya bila peredam
  *   aktif (scrollDamping, bukan reduced motion, bukan navigasi anchor) DAN faktor di posisi target
  *   < 1 atau loop peredam masih berjalan (supaya event berikutnya dari flick yang sama tidak
- *   berganti-ganti antara native dan peredam). Di luar zona dan transisi: scroll native utuh.
- * - Faktor = fungsi posisi tengah viewport (factorAt, dari engine): scrollDampFactor di dalam
- *   zona, naik halus (smoothstep) ke 1 sepanjang zona transisi di luar tiap tepi.
+ *   berganti-ganti antara native dan peredam). Faktor tepat 1 → scroll native utuh.
+ * - Faktor = fungsi posisi tengah viewport (factorAt → scrollmap.dampFactorAt): lerp(1,
+ *   scrollDampFactor, w), w = smoothstep(dampWeightLow, dampWeightHigh, m), m = intensitas jeda di
+ *   posisi itu (rumus yang sama dengan animasi). Kontinu; 1 di kedua ujung rentang dan di luarnya.
  * - Delta dinormalkan (baris/halaman → px), lalu diintegrasikan per langkah kecil (DAMP.chunkPx)
  *   dengan faktor di tiap posisi, jadi flick besar yang masuk/keluar zona tetap halus.
  * - preventDefault, posisi target += delta teredam (dibatasi [0, maks scroll]); loop rAF

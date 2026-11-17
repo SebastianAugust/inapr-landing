@@ -21,6 +21,7 @@ import {
 } from '@/config/pointfield'
 import { BREAK_SHAPES, SECTION_IDS } from '@/lib/sections'
 import type { PointFieldDebug, PointFieldEngine } from '@/pointfield/engine'
+import { dampEquivalentVh } from '@/pointfield/scrollmap'
 
 const STORAGE_KEY = 'inapr-tune'
 const REBUILD_DELAY = 300
@@ -88,17 +89,37 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
   },
   {
     title: 'Scroll di jeda (anti-skip)',
-    note: 'Tanpa gerbang dan tanpa snap di jeda: posisi scroll tidak pernah ditarik. Peredam hanya memperkecil delta roda/trackpad di zona jeda (lead + jeda + trail) plus transisi; sentuhan, keyboard, dan drag scrollbar tetap native. Tepi 0 = mati.',
+    note: 'Tanpa gerbang dan tanpa snap di jeda: posisi scroll tidak pernah ditarik. Peredam hanya memperkecil delta roda/trackpad, dan hanya saat bentuk terlihat: faktor = lerp(1, faktor penuh, smoothstep(bobot mulai, bobot penuh, m)), m = intensitas jeda. Sentuhan, keyboard, dan drag scrollbar tetap native. Tepi 0 = mati.',
     specs: [
       {
         key: 'scrollDampFactor',
-        label: 'Peredam: faktor di zona jeda (× jarak roda)',
+        label: 'Peredam: faktor saat bentuk terlihat penuh (× jarak roda)',
         min: 0.1,
         max: 1,
         step: 0.05,
-        hint: (p) => 'satu notch 100px → ±' + Math.round(100 * p.scrollDampFactor) + 'px di zona jeda (rentang uji 0,25–0,7)',
+        hint: (p) => 'satu notch 100px → ±' + Math.round(100 * p.scrollDampFactor) + 'px saat bentuk penuh',
       },
-      { key: 'scrollDampTransitionVh', label: 'Peredam: zona transisi (vh, tiap sisi)', min: 0, max: 100, step: 5 },
+      {
+        key: 'dampWeightLow',
+        label: 'Peredam: mulai terasa pada intensitas m',
+        min: 0,
+        max: 0.99,
+        step: 0.01,
+        hint: (p) => 'm < ' + p.dampWeightLow.toFixed(2) + ' (lead, zoom in awal, zoom out akhir, trail) → scroll normal',
+      },
+      {
+        key: 'dampWeightHigh',
+        label: 'Peredam: penuh pada intensitas m',
+        min: 0.01,
+        max: 1,
+        step: 0.01,
+        hint: (p) =>
+          'setara berat (tanpa batas 40%): desktop ≈ ' +
+          Math.round(dampEquivalentVh(p.edgeLeadVh + BREAK_HEIGHT.desktop + p.edgeTrailVh, p)) +
+          'vh · mobile ≈ ' +
+          Math.round(dampEquivalentVh(p.edgeLeadVh + BREAK_HEIGHT.mobile + p.edgeTrailVh, p)) +
+          'vh (tinggi jeda dari config; nilai panel di bawah)',
+      },
       { key: 'edgeLeadVh', label: 'Tepi lead: zoom in mulai sebelum jeda (vh)', min: 0, max: 100, step: 5 },
       {
         key: 'edgeTrailVh',
@@ -692,6 +713,18 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
           <p className="tp-note">
             Tinggi diterapkan langsung (inline di tiap jeda) dan tersimpan di panel; nilai di config (BREAK_HEIGHT) baru berlaku
             setelah menempel dan reload halaman. Jeda sengaja tanpa titik snap dan tanpa gerbang.
+          </p>
+          <p className="tp-note">
+            Setara berat total (∫ 1/faktor sepanjang lead + jeda + trail; target ±300–380vh): desktop ≈{' '}
+            {Math.round(dampEquivalentVh(params.edgeLeadVh + extras.breakHeight.desktop + params.edgeTrailVh, params))}vh dari{' '}
+            {Math.round(params.edgeLeadVh + extras.breakHeight.desktop + params.edgeTrailVh)}vh · mobile ≈{' '}
+            {Math.round(dampEquivalentVh(params.edgeLeadVh + extras.breakHeight.mobile + params.edgeTrailVh, params))}vh dari{' '}
+            {Math.round(params.edgeLeadVh + extras.breakHeight.mobile + params.edgeTrailVh)}vh. Terukur di layar ini (dengan batas 40%
+            section): {debug.dampEquivVh.length ? Math.round(Math.min(...debug.dampEquivVh)) + '–' + Math.round(Math.max(...debug.dampEquivVh)) : '–'}vh
+            {debug.kind === 'break' && debug.dampEquivVh[debug.index] !== undefined
+              ? ' (jeda ini ' + Math.round(debug.dampEquivVh[debug.index]) + 'vh)'
+              : ''}
+            {params.scrollDamping ? '' : ' · peredam MATI: setara = rentang'}.
           </p>
           <div className="tp-row tp-colors">
             <label htmlFor={uid + '-damp'}>Peredam roda di zona jeda aktif</label>

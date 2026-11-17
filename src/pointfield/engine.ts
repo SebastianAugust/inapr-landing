@@ -22,8 +22,9 @@
  *   sebelumnya dan edgeTrailVh ke awal section berikutnya. T dihitung atas rentang efektif ini
  *   (effTops/effHeights), jadi fase jeda proporsional atas lead + jeda + trail, section netral di
  *   luarnya, dan rotasi pandang section baru mulai setelah trail. Reduced motion: tanpa tepi.
- * - PEREDAM RODA (wheeldamp.ts, params.scrollDamping): di zona rentang efektif jeda (+ transisi
- *   scrollDampTransitionVh) delta roda diperkecil (scrollDampFactor). Satu-satunya penulis scrollY
+ * - PEREDAM RODA (wheeldamp.ts, params.scrollDamping): delta roda diperkecil menurut intensitas jeda
+ *   di posisi itu (scrollmap.dampFactorAt): berat hanya saat bentuk terlihat, 1 di lead, zoom in
+ *   awal, zoom out akhir, trail, dan di luar rentang efektif. Satu-satunya penulis scrollY
  *   selain navigasi eksplisit; hanya memproses delta roda pengguna, tidak pernah menarik posisi.
  * - ARAH ZOOM (kiri/kanan/atas/bawah/sudut) per jeda bukan posisi bentuk di layar, melainkan
  *   ke mana kamera menyimpang: titik fokus C = arah zoom × zoomReach dari pusat field.
@@ -86,7 +87,17 @@ import {
   type ZoomDirection,
 } from '@/config/pointfield'
 import { buildPointData, SHAPE_BASE_RADIUS, type PointData } from './geometry'
-import { computeFrame, createFrameState, extendBreaks, lerp, phaseBounds, scrollTarget, smoothstep, type SeqItem } from './scrollmap'
+import {
+  computeFrame,
+  createFrameState,
+  dampEquivalentVh,
+  dampFactorAt,
+  extendBreaks,
+  lerp,
+  phaseBounds,
+  scrollTarget,
+  type SeqItem,
+} from './scrollmap'
 import { fragmentShader, vertexShader } from './shaders'
 import { createWheelDamper, type DampDebug } from './wheeldamp'
 
@@ -136,6 +147,8 @@ export interface PointFieldDebug {
   safeZone: { on: boolean; left: number; right: number }
   /** Rentang efektif jeda (px dokumen: awal, akhir) setelah lead/trail; untuk panel dan pengujian. */
   zones: [number, number][]
+  /** Setara berat roda per jeda (vh): ∫ 1/faktor sepanjang rentang efektif terukur (termasuk batas EDGE). */
+  dampEquivVh: number[]
   /** Peredam roda. */
   damp: DampDebug
 }
@@ -397,8 +410,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   /** Rentang efektif (jeda + lead/trail, section menyusut): dasar T dan zona peredam. */
   const effTops = new Float64Array(seq.length)
   const effHeights = new Float64Array(seq.length)
-  /** Px transisi peredam di luar tiap tepi zona jeda (dihitung di measure()). */
-  let dampTransition = 0
   const mat = host.closest<HTMLElement>('main')
 
   const state = createFrameState(params)
@@ -602,26 +613,15 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
     const lead = reduce ? 0 : Math.max(0, params.edgeLeadVh) * vh
     const trail = reduce ? 0 : Math.max(0, params.edgeTrailVh) * vh
     extendBreaks(seq, tops, heights, lead, trail, EDGE.maxSectionFraction, effTops, effHeights)
-    dampTransition = Math.max(0, params.scrollDampTransitionVh) * vh
   }
 
   /**
-   * Faktor peredam roda di posisi tengah viewport `mid`: scrollDampFactor di dalam rentang
-   * efektif jeda, naik halus (smoothstep) ke 1 sepanjang dampTransition di luar tiap tepi.
-   * Zona yang berdekatan: faktor terkecil.
+   * Faktor peredam roda di posisi tengah viewport `mid` (scrollmap.dampFactorAt): mengikuti
+   * intensitas jeda m di posisi itu, jadi berat hanya saat bentuk terlihat; 1 di luar rentang
+   * efektif jeda.
    */
-  function dampFactorAt(mid: number): number {
-    const inner = Math.min(1, Math.max(0.05, params.scrollDampFactor))
-    let factor = 1
-    for (let i = 0; i < seq.length; i++) {
-      if (seq[i].kind !== 'break') continue
-      const start = effTops[i]
-      const end = start + effHeights[i]
-      const gap = mid < start ? start - mid : mid > end ? mid - end : 0
-      const f = gap === 0 ? inner : dampTransition > 0 ? lerp(inner, 1, smoothstep(0, dampTransition, gap)) : 1
-      if (f < factor) factor = f
-    }
-    return factor
+  function dampFactorHere(mid: number): number {
+    return dampFactorAt(mid, seq, effTops, effHeights, params)
   }
 
   function resize(): boolean {
@@ -1108,7 +1108,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       old.dispose()
     }
     applyParamUniforms()
-    measureRanges() // tepi jeda / transisi peredam bisa berubah
+    measureRanges() // tepi jeda bisa berubah
     // Paksa mat dihitung ulang dan posisi bentuk diukur ulang dengan parameter baru.
     matOffset = Number.NaN
     anchorDirty = true
@@ -1242,7 +1242,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   // Peredam roda: tidak aktif saat reduced motion dan selama navigasi anchor jauh (T ditahan).
   const damper = createWheelDamper({
     enabled: () => params.scrollDamping && !reduce && !navigating && !destroyed,
-    factorAt: dampFactorAt,
+    factorAt: dampFactorHere,
   })
   if ('fonts' in document) {
     document.fonts.ready.then(() => {
@@ -1335,6 +1335,11 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
         peak: uniforms.uPeak.value,
         safeZone: { on: uniforms.uSafeOn.value > 0, left: safeLeft, right: safeRight },
         zones: seq.flatMap((it, i) => (it.kind === 'break' ? [[effTops[i], effTops[i] + effHeights[i]] as [number, number]] : [])),
+        dampEquivVh: seq.flatMap((it, i) =>
+          it.kind === 'break'
+            ? [dampEquivalentVh((effHeights[i] / (document.documentElement.clientHeight || window.innerHeight)) * 100, params)]
+            : [],
+        ),
         damp: damper.debug(),
       }
     },
