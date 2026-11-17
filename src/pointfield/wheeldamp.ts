@@ -14,6 +14,8 @@
  * - Faktor = fungsi posisi tengah viewport (factorAt → scrollmap.dampFactorAt): lerp(1,
  *   scrollDampFactor, w), w = smoothstep(dampWeightLow, dampWeightHigh, m), m = intensitas jeda di
  *   posisi itu (rumus yang sama dengan animasi). Kontinu; 1 di kedua ujung rentang dan di luarnya.
+ *   Engine menggabungkannya dengan REM MAGNETIK di awal section (bell di sekitar posisi snap CSS)
+ *   lewat min(); peredam ini aktif di mana pun faktor gabungan < 1, dengan syarat keselamatan sama.
  * - Delta dinormalkan (baris/halaman → px), lalu diintegrasikan per langkah kecil (DAMP.chunkPx)
  *   dengan faktor di tiap posisi, jadi flick besar yang masuk/keluar zona tetap halus.
  * - preventDefault, posisi target += delta teredam (dibatasi [0, maks scroll]); loop rAF

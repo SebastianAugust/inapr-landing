@@ -57,6 +57,19 @@ export interface PointFieldParams {
   /** Intensitas m tempat peredam penuh (w = 1 di atasnya: faktor = scrollDampFactor). */
   dampWeightHigh: number
   /**
+   * "Rem magnetik" di awal tiap section yang didahului jeda (section 2..8): roda/trackpad diredam di
+   * sekitar yRem = posisi scrollY saat judul tepat di bawah navbar (= posisi snap proximity CSS:
+   * tepi atas section − scroll-padding-top − scroll-margin-top). Memakai peredam roda yang sama
+   * (wheeldamp.ts); digabung dengan peredam jeda lewat min(), tidak dikalikan. Hanya roda; sentuhan
+   * mengandalkan snap proximity. Mati saat navigasi dan reduced motion.
+   */
+  scrollBrake: boolean
+  /** Pengali jarak roda tepat di yRem (1 = tanpa rem). */
+  brakeFactor: number
+  /** Jendela rem (vh, dalam d = scrollY − yRem): naik dari −brakeBeforeVh, puncak di 0, turun sampai +brakeAfterVh. */
+  brakeBeforeVh: number
+  brakeAfterVh: number
+  /**
    * Animasi jeda melebar ke section di sekitarnya (vh): zoom in mulai edgeLeadVh sebelum jeda
    * (akhir section sebelumnya), zoom out selesai edgeTrailVh sesudah jeda (awal section berikut).
    * Progres fase dihitung atas lead + jeda + trail. Tiap tepi dibatasi EDGE.maxSectionFraction
@@ -226,6 +239,10 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   scrollDampFactor: 0.5,
   dampWeightLow: 0.55,
   dampWeightHigh: 0.9,
+  scrollBrake: true,
+  brakeFactor: 0.5,
+  brakeBeforeVh: 35,
+  brakeAfterVh: 20,
   edgeLeadVh: 40,
   edgeTrailVh: 40,
   countDesktop: 20000,

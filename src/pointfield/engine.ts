@@ -24,7 +24,9 @@
  *   luarnya, dan rotasi pandang section baru mulai setelah trail. Reduced motion: tanpa tepi.
  * - PEREDAM RODA (wheeldamp.ts, params.scrollDamping): delta roda diperkecil menurut intensitas jeda
  *   di posisi itu (scrollmap.dampFactorAt): berat hanya saat bentuk terlihat, 1 di lead, zoom in
- *   awal, zoom out akhir, trail, dan di luar rentang efektif. Satu-satunya penulis scrollY
+ *   awal, zoom out akhir, trail, dan di luar rentang efektif. Ditambah REM MAGNETIK
+ *   (params.scrollBrake) di sekitar awal section 2..8 (yRem = posisi snap CSS); faktor gabungan =
+ *   min(faktor jeda, faktor rem). Satu-satunya penulis scrollY
  *   selain navigasi eksplisit; hanya memproses delta roda pengguna, tidak pernah menarik posisi.
  * - ARAH ZOOM (kiri/kanan/atas/bawah/sudut) per jeda bukan posisi bentuk di layar, melainkan
  *   ke mana kamera menyimpang: titik fokus C = arah zoom × zoomReach dari pusat field.
@@ -90,6 +92,7 @@ import { buildPointData, SHAPE_BASE_RADIUS, type PointData } from './geometry'
 import {
   computeFrame,
   createFrameState,
+  brakeFactorAt,
   dampEquivalentVh,
   dampFactorAt,
   extendBreaks,
@@ -149,6 +152,10 @@ export interface PointFieldDebug {
   zones: [number, number][]
   /** Setara berat roda per jeda (vh): ∫ 1/faktor sepanjang rentang efektif terukur (termasuk batas EDGE). */
   dampEquivVh: number[]
+  /** Posisi rem magnetik (scrollY px) di awal section 2..8. */
+  rems: number[]
+  /** Perjalanan jeda → section (awal rentang jeda sampai yRem + brakeAfterVh): panjang dan setara berat (vh). */
+  trips: { lengthVh: number; equivVh: number }[]
   /** Peredam roda. */
   damp: DampDebug
 }
@@ -410,6 +417,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   /** Rentang efektif (jeda + lead/trail, section menyusut): dasar T dan zona peredam. */
   const effTops = new Float64Array(seq.length)
   const effHeights = new Float64Array(seq.length)
+  /** Posisi rem magnetik (scrollY px) di awal section 2..8 (lihat measureRems()). */
+  const rems: number[] = []
   const mat = host.closest<HTMLElement>('main')
 
   const state = createFrameState(params)
@@ -603,8 +612,23 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       heights[i] = rect.height || 1
     }
     measureRanges()
+    measureRems()
     measureSafeZone()
     dirty = true
+  }
+
+  /**
+   * Posisi rem (scrollY) untuk tiap section yang didahului jeda: tepi atas section −
+   * scroll-padding-top − scroll-margin-top = posisi snap proximity CSS (scroll-snap-align: start).
+   */
+  function measureRems(): void {
+    const pad = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0
+    rems.length = 0
+    for (let i = 1; i < seq.length; i++) {
+      if (seq[i].kind !== 'section' || seq[i - 1].kind !== 'break') continue
+      const margin = parseFloat(getComputedStyle(seq[i].el).scrollMarginTop) || 0
+      rems.push(tops[i] - pad - margin)
+    }
   }
 
   /** Rentang efektif dari tops/heights DOM + tepi lead/trail (vh → px). Reduced motion: tanpa tepi. */
@@ -621,7 +645,34 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
    * efektif jeda.
    */
   function dampFactorHere(mid: number): number {
-    return dampFactorAt(mid, seq, effTops, effHeights, params)
+    const breakFactor = params.scrollDamping ? dampFactorAt(mid, seq, effTops, effHeights, params) : 1
+    if (!params.scrollBrake || rems.length === 0) return breakFactor
+    // Rem dihitung atas scrollY (posisi judul), peredam jeda atas tengah viewport: mid − ½ viewport.
+    const vh = (document.documentElement.clientHeight || window.innerHeight) / 100
+    // min(), bukan perkalian: trail jeda yang berimpit dengan awal section tidak menumpuk.
+    return Math.min(breakFactor, brakeFactorAt(mid - 50 * vh, rems, vh, params))
+  }
+
+  /**
+   * Perjalanan jeda → section untuk tiap rem: dari awal rentang efektif jeda sebelumnya sampai
+   * yRem + brakeAfterVh. Panjang (vh) dan setara berat roda (vh, ∫ 1/faktor gabungan).
+   */
+  function brakeTrips(): { lengthVh: number; equivVh: number }[] {
+    const viewport = document.documentElement.clientHeight || window.innerHeight
+    const vh = viewport / 100
+    const trips: { lengthVh: number; equivVh: number }[] = []
+    let r = 0
+    for (let i = 1; i < seq.length; i++) {
+      if (seq[i].kind !== 'section' || seq[i - 1].kind !== 'break') continue
+      const rem = rems[r++]
+      if (rem === undefined) break
+      const from = effTops[i - 1] - viewport / 2
+      const to = rem + Math.max(0, params.brakeAfterVh) * vh
+      let equiv = 0
+      for (let y = from; y < to; y += 2) equiv += Math.min(2, to - y) / dampFactorHere(y + viewport / 2)
+      trips.push({ lengthVh: (to - from) / vh, equivVh: equiv / vh })
+    }
+    return trips
   }
 
   function resize(): boolean {
@@ -1241,7 +1292,7 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   window.addEventListener('touchcancel', onTouchEnd, passive)
   // Peredam roda: tidak aktif saat reduced motion dan selama navigasi anchor jauh (T ditahan).
   const damper = createWheelDamper({
-    enabled: () => params.scrollDamping && !reduce && !navigating && !destroyed,
+    enabled: () => (params.scrollDamping || params.scrollBrake) && !reduce && !navigating && !destroyed,
     factorAt: dampFactorHere,
   })
   if ('fonts' in document) {
@@ -1340,6 +1391,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
             ? [dampEquivalentVh((effHeights[i] / (document.documentElement.clientHeight || window.innerHeight)) * 100, params)]
             : [],
         ),
+        rems: [...rems],
+        trips: brakeTrips(),
         damp: damper.debug(),
       }
     },

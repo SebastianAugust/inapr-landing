@@ -21,7 +21,7 @@ import {
 } from '@/config/pointfield'
 import { BREAK_SHAPES, SECTION_IDS } from '@/lib/sections'
 import type { PointFieldDebug, PointFieldEngine } from '@/pointfield/engine'
-import { dampEquivalentVh } from '@/pointfield/scrollmap'
+import { brakeEquivalentVh, dampEquivalentVh } from '@/pointfield/scrollmap'
 
 const STORAGE_KEY = 'inapr-tune'
 const REBUILD_DELAY = 300
@@ -39,7 +39,7 @@ const FALLBACK_READ_COLORS: ReadColors = {
 }
 const HEX = /^#[0-9a-f]{6}$/i
 
-type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections' | 'scrollDamping'>
+type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections' | 'scrollDamping' | 'scrollBrake'>
 type AngleKey = 'yaw' | 'pitch'
 
 interface Spec {
@@ -120,6 +120,16 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
           Math.round(dampEquivalentVh(p.edgeLeadVh + BREAK_HEIGHT.mobile + p.edgeTrailVh, p)) +
           'vh (tinggi jeda dari config; nilai panel di bawah)',
       },
+      {
+        key: 'brakeFactor',
+        label: 'Rem awal section: faktor tepat di judul (× jarak roda)',
+        min: 0.1,
+        max: 1,
+        step: 0.05,
+        hint: (p) => 'satu notch 100px → ±' + Math.round(100 * p.brakeFactor) + 'px tepat di posisi judul (= posisi snap)',
+      },
+      { key: 'brakeBeforeVh', label: 'Rem: mulai sebelum judul (vh)', min: 0, max: 80, step: 5 },
+      { key: 'brakeAfterVh', label: 'Rem: berakhir sesudah judul (vh)', min: 0, max: 80, step: 5 },
       { key: 'edgeLeadVh', label: 'Tepi lead: zoom in mulai sebelum jeda (vh)', min: 0, max: 100, step: 5 },
       {
         key: 'edgeTrailVh',
@@ -301,6 +311,7 @@ function sanitize(raw: unknown): PointFieldParams {
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
   }
   if (typeof source.scrollDamping === 'boolean') out.scrollDamping = source.scrollDamping
+  if (typeof source.scrollBrake === 'boolean') out.scrollBrake = source.scrollBrake
   for (const key of ['yaw', 'pitch'] as const) {
     const list = source[key]
     if (Array.isArray(list) && list.length === out[key].length && list.every((v) => typeof v === 'number' && Number.isFinite(v))) {
@@ -455,7 +466,7 @@ const tidy = (value: number) => Number(value.toFixed(4))
 
 /** Objek siap tempel ke src/config/pointfield.ts, plus warna baca (tokens.css) dan status snap. */
 function toSource(params: PointFieldParams, extras: Extras): string {
-  const lines = [`  scrollDamping: ${params.scrollDamping},`, ...SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)]
+  const lines = [`  scrollDamping: ${params.scrollDamping},`, `  scrollBrake: ${params.scrollBrake},`, ...SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)]
   const list = (values: readonly number[]) => values.map(tidy).join(', ')
   const tokens = (theme: ThemeName) => READ_TOKENS.map((token, i) => '  ' + token + ': ' + extras.colors[theme][i] + ';')
   return [
@@ -735,6 +746,21 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
               onChange={(event) => setParams((current) => ({ ...current, scrollDamping: event.target.checked }))}
             />
           </div>
+          <div className="tp-row tp-colors">
+            <label htmlFor={uid + '-brake'}>Rem magnetik di awal section aktif</label>
+            <input
+              id={uid + '-brake'}
+              type="checkbox"
+              checked={params.scrollBrake}
+              onChange={(event) => setParams((current) => ({ ...current, scrollBrake: event.target.checked }))}
+            />
+          </div>
+          <p className="tp-note">
+            Rem saja: jendela {Math.round(params.brakeBeforeVh + params.brakeAfterVh)}vh → setara ≈{' '}
+            {Math.round(brakeEquivalentVh(params))}vh. Perjalanan jeda → section (awal rentang jeda sampai yRem +{' '}
+            {params.brakeAfterVh}vh, gabungan min): {debug.trips.length ? debug.trips.map((t) => Math.round(t.equivVh)).join(' / ') : '–'}vh setara
+            {debug.trips.length ? ' dari ' + debug.trips.map((t) => Math.round(t.lengthVh)).join(' / ') + 'vh' : ''}.
+          </p>
           {(['desktop', 'mobile'] as const).map((key) => (
             <div key={key} className="tp-row">
               <label htmlFor={uid + '-bh-' + key}>{key === 'desktop' ? 'Desktop (vh, ≥ 768px)' : 'Mobile (svh, < 768px)'}</label>
