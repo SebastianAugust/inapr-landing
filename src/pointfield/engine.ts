@@ -24,11 +24,10 @@
  *   luarnya, dan rotasi pandang section baru mulai setelah trail. Reduced motion: tanpa tepi.
  * - PEREDAM RODA (wheeldamp.ts, params.scrollDamping): delta roda diperkecil menurut intensitas jeda
  *   di posisi itu (scrollmap.dampFactorAt): berat hanya saat bentuk terlihat, 1 di lead, zoom in
- *   awal, zoom out akhir, trail, dan di luar rentang efektif. Ditambah REM KEDATANGAN
- *   (params.scrollBrake) di sekitar awal section 2..8 (yRem = posisi snap CSS) plus "tahan
- *   kedatangan" setelah yRem dilintasi oleh input cepat (crossesRem); peka kecepatan di wheeldamp.ts,
- *   digabung dengan profil jeda lewat min(). Satu-satunya penulis scrollY
- *   selain navigasi eksplisit; hanya memproses delta roda pengguna, tidak pernah menarik posisi.
+ *   awal, zoom out akhir, trail, dan di luar rentang efektif. Di dalam konten (section) scroll
+ *   normal tanpa peredam; berhenti rapi di awal section dikerjakan scroll-snap CSS (global.css).
+ *   Satu-satunya penulis scrollY selain navigasi eksplisit; hanya memproses delta roda pengguna,
+ *   tidak pernah menarik posisi.
  * - ARAH ZOOM (kiri/kanan/atas/bawah/sudut) per jeda bukan posisi bentuk di layar, melainkan
  *   ke mana kamera menyimpang: titik fokus C = arah zoom × zoomReach dari pusat field.
  *   Kamera bergerak di kurva Bézier kuadratik dari pose netral (jarak cameraFar, melihat
@@ -84,7 +83,6 @@ import {
   READ_COLOR_TOKENS,
   readStats,
   SAFE_ZONE,
-  SECTION_BRAKE,
   SETTLE,
   ZOOM_FX,
   type PointFieldParams,
@@ -94,8 +92,6 @@ import { buildPointData, SHAPE_BASE_RADIUS, type PointData } from './geometry'
 import {
   computeFrame,
   createFrameState,
-  brakeZoneAhead,
-  brakeZoneAt,
   dampEquivalentVh,
   dampFactorAt,
   extendBreaks,
@@ -155,8 +151,6 @@ export interface PointFieldDebug {
   zones: [number, number][]
   /** Setara berat roda per jeda (vh): ∫ 1/faktor sepanjang rentang efektif terukur (termasuk batas EDGE). */
   dampEquivVh: number[]
-  /** Posisi rem kedatangan (scrollY px) di awal section 2..8. */
-  rems: number[]
   /** Peredam roda. */
   damp: DampDebug
 }
@@ -418,8 +412,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   /** Rentang efektif (jeda + lead/trail, section menyusut): dasar T dan zona peredam. */
   const effTops = new Float64Array(seq.length)
   const effHeights = new Float64Array(seq.length)
-  /** Posisi rem kedatangan (scrollY px) di awal section 2..8 (lihat measureRems()). */
-  const rems: number[] = []
   const mat = host.closest<HTMLElement>('main')
 
   const state = createFrameState(params)
@@ -613,23 +605,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
       heights[i] = rect.height || 1
     }
     measureRanges()
-    measureRems()
     measureSafeZone()
     dirty = true
-  }
-
-  /**
-   * Posisi rem (scrollY) untuk tiap section yang didahului jeda: tepi atas section −
-   * scroll-padding-top − scroll-margin-top = posisi snap proximity CSS (scroll-snap-align: start).
-   */
-  function measureRems(): void {
-    const pad = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0
-    rems.length = 0
-    for (let i = 1; i < seq.length; i++) {
-      if (seq[i].kind !== 'section' || seq[i - 1].kind !== 'break') continue
-      const margin = parseFloat(getComputedStyle(seq[i].el).scrollMarginTop) || 0
-      rems.push(tops[i] - pad - margin)
-    }
   }
 
   /** Rentang efektif dari tops/heights DOM + tepi lead/trail (vh → px). Reduced motion: tanpa tepi. */
@@ -647,24 +624,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
    */
   function dampFactorHere(mid: number): number {
     return params.scrollDamping ? dampFactorAt(mid, seq, effTops, effHeights, params) : 1
-  }
-
-  /**
-   * Bobot ZONA rem kedatangan 0..1 di scrollY `y` (bell di sekitar yRem). wheeldamp.ts mengalikannya
-   * dengan bobot kecepatan input, jadi input lambat/normal tidak terpengaruh; "tahan kedatangan"
-   * dihitung di wheeldamp.ts (dipicu kedatangan cepat, lihat crossesRem).
-   */
-  function brakeAt(y: number): number {
-    if (!params.scrollBrake || rems.length === 0) return 0
-    const vh = (document.documentElement.clientHeight || window.innerHeight) / 100
-    return brakeZoneAt(y, rems, vh, params)
-  }
-
-  /** Perpindahan scrollY dari `from` ke `to` melintasi (atau tepat mendarat di) salah satu yRem? */
-  function crossesRem(from: number, to: number): boolean {
-    if (!params.scrollBrake || from === to) return false
-    for (const rem of rems) if ((from < rem && to >= rem) || (from > rem && to <= rem)) return true
-    return false
   }
 
   function resize(): boolean {
@@ -1284,16 +1243,8 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
   window.addEventListener('touchcancel', onTouchEnd, passive)
   // Peredam roda: tidak aktif saat reduced motion dan selama navigasi anchor jauh (T ditahan).
   const damper = createWheelDamper({
-    enabled: () => (params.scrollDamping || params.scrollBrake) && !reduce && !navigating && !destroyed,
+    enabled: () => params.scrollDamping && !reduce && !navigating && !destroyed,
     factorAt: dampFactorHere,
-    brakeAt,
-    brake: () => ({ factor: params.sectionBrakeFactor, maxDeltaPerFrame: params.maxDeltaPerFrame, holdMs: params.sectionHoldMs }),
-    crossesRem,
-    brakeAhead: (y, dir) => {
-      if (!params.scrollBrake || rems.length === 0) return false
-      const vh = (document.documentElement.clientHeight || window.innerHeight) / 100
-      return brakeZoneAhead(y, dir, SECTION_BRAKE.lookaheadVh * vh, rems, vh, params)
-    },
   })
   if ('fonts' in document) {
     document.fonts.ready.then(() => {
@@ -1391,7 +1342,6 @@ export function createPointField(host: HTMLElement, options: PointFieldOptions):
             ? [dampEquivalentVh((effHeights[i] / (document.documentElement.clientHeight || window.innerHeight)) * 100, params)]
             : [],
         ),
-        rems: [...rems],
         damp: damper.debug(),
       }
     },

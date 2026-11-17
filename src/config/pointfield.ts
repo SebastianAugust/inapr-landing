@@ -57,29 +57,6 @@ export interface PointFieldParams {
   /** Intensitas m tempat peredam penuh (w = 1 di atasnya: faktor = scrollDampFactor). */
   dampWeightHigh: number
   /**
-   * "Rem kedatangan" di awal tiap section yang didahului jeda (section 2..8), hanya roda/trackpad,
-   * lewat peredam roda yang sama (wheeldamp.ts). yRem = posisi scrollY saat judul tepat di bawah
-   * navbar (= posisi snap CSS: tepi atas section − scroll-padding-top − scroll-margin-top).
-   * PEKA KECEPATAN: input lambat/normal (< SECTION_BRAKE.slowPxS) tidak diubah sama sekali (tetap
-   * native); input cepat (flick, putaran roda cepat) diredam sectionBrakeFactor dan dibatasi
-   * maxDeltaPerFrame, input berlebih dibuang (posisi tidak pernah ditarik). Bobot = maks(zona di
-   * sekitar yRem, "tahan kedatangan" sectionHoldMs setelah yRem dilintasi dari arah mana pun).
-   * Digabung dengan peredam jeda lewat min(). Mati saat navigasi dan reduced motion.
-   */
-  scrollBrake: boolean
-  /** Zona rem (vh, d = scrollY − yRem): bobot naik halus dari −before ke 1 di 0, turun halus ke 0 di +after. */
-  sectionBrakeZoneBeforeVh: number
-  sectionBrakeZoneAfterVh: number
-  /** Pengali jarak roda untuk input cepat dengan bobot rem penuh (1 = tanpa rem). */
-  sectionBrakeFactor: number
-  /**
-   * Batas gerak scroll per frame 60 fps (px) untuk input cepat dengan bobot rem penuh; dengan bobot w
-   * batasnya maxDeltaPerFrame / w (longgar di tepi zona). Input yang melebihi batas dibuang.
-   */
-  maxDeltaPerFrame: number
-  /** "Tahan kedatangan" (ms) setelah yRem dilintasi: bobot rem tetap 1, lalu pulih halus (SECTION_BRAKE.releaseMs). */
-  sectionHoldMs: number
-  /**
    * Animasi jeda melebar ke section di sekitarnya (vh): zoom in mulai edgeLeadVh sebelum jeda
    * (akhir section sebelumnya), zoom out selesai edgeTrailVh sesudah jeda (awal section berikut).
    * Progres fase dihitung atas lead + jeda + trail. Tiap tepi dibatasi EDGE.maxSectionFraction
@@ -249,12 +226,6 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   scrollDampFactor: 0.5,
   dampWeightLow: 0.55,
   dampWeightHigh: 0.9,
-  scrollBrake: true,
-  sectionBrakeZoneBeforeVh: 40,
-  sectionBrakeZoneAfterVh: 25,
-  sectionBrakeFactor: 0.25,
-  maxDeltaPerFrame: 3,
-  sectionHoldMs: 350,
   edgeLeadVh: 40,
   edgeTrailVh: 40,
   countDesktop: 20000,
@@ -333,6 +304,8 @@ export const GEOMETRY_KEYS = [
  * 768px; svh stabil saat bar alamat muncul/menyusut). Tanpa teks; canvas fixed, jadi jeda yang
  * tinggi terasa "berat": animasi menempel ke scroll sepanjang jeda. Ditambah tepi lead/trail
  * (edgeLeadVh/edgeTrailVh) dan peredam roda (scrollDamping) supaya scroll cepat tidak melompatinya.
+ * Ubah juga --break-h-desktop / --break-h-mobile di :root (src/styles/global.css): area snap
+ * section (scroll-margin-bottom) harus selebar jeda di bawahnya.
  * Setara berat roda dengan default (dampEquivalentVh): desktop 40 + 180 + 40 = 260vh → ±358vh,
  * mobile 40 + 140 + 40 = 220vh → ±303vh (tanpa batas EDGE di section pendek).
  */
@@ -343,29 +316,6 @@ export const BREAK_HEIGHT = { desktop: 180, mobile: 140 } as const
  * section yang dimasukinya, jadi section pendek tetap punya bagian netral (≥ 1 − 2 × 0,4 = 20%).
  */
 export const EDGE = { maxSectionFraction: 0.4 } as const
-
-/**
- * Rem kedatangan (scrollBrake): kecepatan input roda = |delta| / selang sejak event searah
- * sebelumnya (dibatasi minIntervalMs..maxIntervalMs), dihaluskan EMA (speedSmoothing per event).
- * Bobot kecepatan = smoothstep(slowPxS, fastPxS, kecepatan): di bawah slowPxS (notch roda tunggal,
- * putaran biasa ≤ ±15 notch/detik, trackpad pelan/sedang) rem tidak bekerja sama sekali.
- * releaseMs = durasi pemulihan halus setelah sectionHoldMs. lookaheadVh = input cepat sudah diambil
- * alih peredam (faktor 1) sejauh ini sebelum zona searah gerak, supaya smooth-scroll native yang
- * sedang berjalan tidak terbawa masuk ke zona. Inersia = bagian dari kedatangan yang sama: selama
- * event roda searah terus datang dengan jarak < gestureGapMs, tahan diperpanjang (paling lama
- * holdMaxMs sejak yRem dilintasi); jeda atau pembalikan arah mengakhirinya (pembalikan melepas tahan).
- */
-export const SECTION_BRAKE = {
-  minIntervalMs: 8,
-  maxIntervalMs: 250,
-  speedSmoothing: 0.5,
-  slowPxS: 1500,
-  fastPxS: 3000,
-  releaseMs: 250,
-  lookaheadVh: 60,
-  gestureGapMs: 120,
-  holdMaxMs: 1500,
-} as const
 
 /**
  * Peredam roda (src/pointfield/wheeldamp.ts):

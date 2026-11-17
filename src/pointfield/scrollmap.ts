@@ -113,52 +113,6 @@ export function dampFactorAt(
   return 1
 }
 
-type ZoneParams = Pick<PointFieldParams, 'sectionBrakeZoneBeforeVh' | 'sectionBrakeZoneAfterVh'>
-
-/**
- * Bobot zona rem kedatangan (bell 0..1) pada d = scrollY − yRem dalam vh: naik (smoothstep) dari 0
- * di d = −before ke 1 di d = 0, turun (smoothstep) ke 0 di d = +after. Sisi dengan panjang 0 =
- * tanpa zona di sisi itu. Kontinu di semua d.
- */
-export function brakeZoneWeight(dVh: number, params: ZoneParams): number {
-  const before = Math.max(0, params.sectionBrakeZoneBeforeVh)
-  const after = Math.max(0, params.sectionBrakeZoneAfterVh)
-  if (dVh < 0) return before > 0 ? smoothstep(-before, 0, dVh) : 0
-  if (dVh > 0) return after > 0 ? 1 - smoothstep(0, after, dVh) : 0
-  return before > 0 || after > 0 ? 1 : 0
-}
-
-/** Bobot zona terbesar di posisi scroll `y` atas semua posisi rem (px; `vh` = 1vh dalam px). */
-export function brakeZoneAt(y: number, rems: readonly number[], vh: number, params: ZoneParams): number {
-  let w = 0
-  for (const rem of rems) w = Math.max(w, brakeZoneWeight((y - rem) / vh, params))
-  return w
-}
-
-/**
- * Ada zona rem (−before..+after di sekitar salah satu yRem) di rentang [y, y + dir × distPx]?
- * Untuk mengambil alih input cepat sebelum zona.
- */
-export function brakeZoneAhead(y: number, dir: number, distPx: number, rems: readonly number[], vh: number, params: ZoneParams): boolean {
-  const lo = dir >= 0 ? y : y - distPx
-  const hi = dir >= 0 ? y + distPx : y
-  const before = Math.max(0, params.sectionBrakeZoneBeforeVh) * vh
-  const after = Math.max(0, params.sectionBrakeZoneAfterVh) * vh
-  for (const rem of rems) if (rem - before <= hi && rem + after >= lo && before + after > 0) return true
-  return false
-}
-
-/**
- * Bobot "tahan kedatangan" `elapsedMs` setelah yRem dilintasi: 1 selama holdMs, lalu turun halus
- * (smoothstep) ke 0 sepanjang releaseMs. Kontinu (tanpa lompatan).
- */
-export function holdWeight(elapsedMs: number, holdMs: number, releaseMs: number): number {
-  // holdMs 0 = tahan kedatangan mati.
-  if (!(elapsedMs >= 0) || !(holdMs > 0)) return 0
-  if (elapsedMs <= holdMs) return 1
-  return releaseMs > 0 ? 1 - smoothstep(0, releaseMs, elapsedMs - holdMs) : 0
-}
-
 /**
  * "Setara berat total" (vh): jarak roda yang dibutuhkan untuk melewati satu rentang jeda sepanjang
  * spanVh = ∫ 1/faktor (aturan titik tengah). Tanpa peredam = spanVh.

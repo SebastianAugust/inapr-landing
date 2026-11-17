@@ -14,7 +14,6 @@ import {
   BREAK_HEIGHT,
   GEOMETRY_KEYS,
   POINTFIELD_DEFAULTS,
-  SECTION_BRAKE,
   readStats,
   ZOOM_DIRECTIONS,
   type PointFieldParams,
@@ -40,7 +39,7 @@ const FALLBACK_READ_COLORS: ReadColors = {
 }
 const HEX = /^#[0-9a-f]{6}$/i
 
-type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections' | 'scrollDamping' | 'scrollBrake'>
+type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections' | 'scrollDamping'>
 type AngleKey = 'yaw' | 'pitch'
 
 interface Spec {
@@ -120,33 +119,6 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
           'vh · mobile ≈ ' +
           Math.round(dampEquivalentVh(p.edgeLeadVh + BREAK_HEIGHT.mobile + p.edgeTrailVh, p)) +
           'vh (tinggi jeda dari config; nilai panel di bawah)',
-      },
-      { key: 'sectionBrakeZoneBeforeVh', label: 'Rem kedatangan: zona sebelum judul (vh)', min: 0, max: 100, step: 5 },
-      { key: 'sectionBrakeZoneAfterVh', label: 'Rem kedatangan: zona sesudah judul (vh)', min: 0, max: 100, step: 5 },
-      {
-        key: 'sectionBrakeFactor',
-        label: 'Rem kedatangan: faktor untuk input cepat (× jarak roda)',
-        min: 0.05,
-        max: 1,
-        step: 0.05,
-        hint: () =>
-          'hanya input cepat: di bawah ' + SECTION_BRAKE.slowPxS + ' px/s (roda/trackpad biasa) tidak berubah, penuh di atas ' + SECTION_BRAKE.fastPxS + ' px/s',
-      },
-      {
-        key: 'maxDeltaPerFrame',
-        label: 'Rem kedatangan: batas gerak per frame (px, input cepat)',
-        min: 1,
-        max: 60,
-        step: 1,
-        hint: (p) => '≈ ' + Math.round(p.maxDeltaPerFrame * 60) + ' px/s di judul; input berlebih dibuang (tidak ditarik balik)',
-      },
-      {
-        key: 'sectionHoldMs',
-        label: 'Rem kedatangan: tahan setelah judul dilintasi (ms)',
-        min: 0,
-        max: 1500,
-        step: 25,
-        hint: (p) => (p.sectionHoldMs > 0 ? 'lalu pulih halus ' + SECTION_BRAKE.releaseMs + ' ms' : 'tahan mati'),
       },
       { key: 'edgeLeadVh', label: 'Tepi lead: zoom in mulai sebelum jeda (vh)', min: 0, max: 100, step: 5 },
       {
@@ -329,7 +301,6 @@ function sanitize(raw: unknown): PointFieldParams {
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
   }
   if (typeof source.scrollDamping === 'boolean') out.scrollDamping = source.scrollDamping
-  if (typeof source.scrollBrake === 'boolean') out.scrollBrake = source.scrollBrake
   for (const key of ['yaw', 'pitch'] as const) {
     const list = source[key]
     if (Array.isArray(list) && list.length === out[key].length && list.every((v) => typeof v === 'number' && Number.isFinite(v))) {
@@ -463,6 +434,10 @@ function applyBreakHeight(heights: Extras['breakHeight']): void {
     el.style.setProperty('--break-h-desktop', heights.desktop + 'vh')
     el.style.setProperty('--break-h-mobile', heights.mobile + 'svh')
   }
+  // Area snap section (scroll-margin-bottom di global.css) membaca variabel yang sama dari <html>.
+  const root = document.documentElement.style
+  root.setProperty('--break-h-desktop', heights.desktop + 'vh')
+  root.setProperty('--break-h-mobile', heights.mobile + 'svh')
 }
 
 /** Saklar scroll-snap untuk pengujian: style inline mengalahkan aturan di global.css. */
@@ -484,7 +459,7 @@ const tidy = (value: number) => Number(value.toFixed(4))
 
 /** Objek siap tempel ke src/config/pointfield.ts, plus warna baca (tokens.css) dan status snap. */
 function toSource(params: PointFieldParams, extras: Extras): string {
-  const lines = [`  scrollDamping: ${params.scrollDamping},`, `  scrollBrake: ${params.scrollBrake},`, ...SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)]
+  const lines = [`  scrollDamping: ${params.scrollDamping},`, ...SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)]
   const list = (values: readonly number[]) => values.map(tidy).join(', ')
   const tokens = (theme: ThemeName) => READ_TOKENS.map((token, i) => '  ' + token + ': ' + extras.colors[theme][i] + ';')
   return [
@@ -764,19 +739,6 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
               onChange={(event) => setParams((current) => ({ ...current, scrollDamping: event.target.checked }))}
             />
           </div>
-          <div className="tp-row tp-colors">
-            <label htmlFor={uid + '-brake'}>Rem kedatangan di awal section aktif</label>
-            <input
-              id={uid + '-brake'}
-              type="checkbox"
-              checked={params.scrollBrake}
-              onChange={(event) => setParams((current) => ({ ...current, scrollBrake: event.target.checked }))}
-            />
-          </div>
-          <p className="tp-note">
-            Rem kedatangan sekarang: zona {debug.damp.brake.toFixed(2)} · tahan {debug.damp.hold.toFixed(2)} · kecepatan roda {Math.round(debug.damp.speed)} px/s (bobot{' '}
-            {debug.damp.speedWeight.toFixed(2)}) · input dibuang {Math.round(debug.damp.discarded)} px.
-          </p>
           {(['desktop', 'mobile'] as const).map((key) => (
             <div key={key} className="tp-row">
               <label htmlFor={uid + '-bh-' + key}>{key === 'desktop' ? 'Desktop (vh, ≥ 768px)' : 'Mobile (svh, < 768px)'}</label>

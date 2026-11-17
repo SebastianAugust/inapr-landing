@@ -193,49 +193,66 @@ html.pf-grabbing * {
 }
 
 @layer base {
+  /*
+   * Tinggi jeda untuk area snap section (scroll-margin-bottom di bawah). HARUS sama dengan
+   * BREAK_HEIGHT di src/config/pointfield.ts (Break.tsx memasang nilai itu per jeda).
+   */
+  :root {
+    --break-h-desktop: 180vh;
+    --break-h-mobile: 140svh;
+  }
+
   html {
     scroll-padding-top: calc(var(--nav-h) + 1rem);
     -webkit-text-size-adjust: 100%;
     /*
-     * Scroll-snap: proximity (bukan mandatory), jadi scroll bebas dan hanya "menarik" bila
-     * berhenti dekat titik snap. Tanpa JS; skalar scroll T engine tetap dibaca dari scrollY.
-     * Dimatikan saat reduced motion (di bawah). Saklar uji: panel ?tune.
+     * Scroll-snap: PROXIMITY. Mandatory diuji dan ditolak: (a) dengan area snap bawaan section
+     * pendek (< viewport) memaksa loncat ke section lain (PageDown +248vh, roda pelan terkunci,
+     * drag scrollbar ditarik 645px); (b) dengan area diperluas (di bawah) tidak lagi loncat, tetapi
+     * punya zona mati sepanjang ±1 viewport sebelum tiap section yang menarik halaman sampai ±0,5
+     * viewport saat berhenti, dan tidak membuat flick roda berhenti lebih baik. Proximity hanya
+     * menarik bila berhenti dekat awal section. Tanpa JS; skalar scroll T engine dibaca dari
+     * scrollY. Tetap aktif saat reduced motion (tanpa animasi: scroll-behavior hanya smooth bila
+     * no-preference). Saklar uji: panel ?tune.
      */
     scroll-snap-type: y proximity;
   }
 
   /*
-   * Titik snap. Section: awal section (di bawah navbar sticky lewat scroll-padding-top).
-   * Section lebih tinggi dari viewport (terutama mobile) tetap bebas digulir: untuk snap area
-   * yang lebih besar dari snapport, posisi mana pun yang menutupi snapport adalah posisi
-   * snap yang sah, jadi isinya tidak terpotong atau terkunci.
-   * scroll-snap-stop: always = scroll BERARAH (fling sentuh, PageDown/Space, roda native, scrollBy
-   * peredam) tidak boleh melewati awal section dalam satu gerakan; berhenti di judul, gerakan
-   * berikutnya lanjut. Tipe tetap proximity (bukan mandatory): jeda sengaja tanpa titik snap.
-   * Roda/trackpad cepat juga diredam rem kedatangan di engine (params.scrollBrake).
+   * Snap area = section + jeda di bawahnya, rata atas (start) di bawah navbar sticky
+   * (scroll-padding-top). Tanpa ini section lebih pendek dari viewport adalah titik snap
+   * sempit: tiap notch roda 100px dari awalnya berakhir dalam jarak proximity dan ditarik
+   * balik, jadi roda pelan TERJEBAK di awal section pendek (terukur: 0 → 0px; 21 notch tanpa
+   * kemajuan). Snap area yang lebih besar dari snapport dianggap bebas digulir: posisi mana pun
+   * yang menutupi snapport adalah posisi snap yang sah, jadi section dan jeda di bawahnya tidak
+   * menarik balik. Ini BUKAN titik snap di jeda: jeda tidak punya titik sendiri, hanya tercakup
+   * area section di atasnya, dan animasi scrub berjalan penuh. Section terakhir tanpa jeda.
+   * scroll-snap-stop: always = scroll berarah (keyboard, scroll programatik) tidak melewati batas
+   * awal area dalam satu gerakan. Catatan terukur: scroll-snap-stop TIDAK menghentikan flick
+   * roda/trackpad di Chrome (hasil sama dengan tanpa snap), itu bukan wewenang CSS.
    */
   [data-section] {
     scroll-snap-align: start;
     scroll-snap-stop: always;
+  }
+  section[data-section]:not(:last-of-type) {
+    scroll-margin-bottom: var(--break-h-mobile);
+  }
+  @media (min-width: 768px) {
+    section[data-section]:not(:last-of-type) {
+      scroll-margin-bottom: var(--break-h-desktop);
+    }
   }
   /* Section pertama: titik snap di scrollY = 0, supaya banner draf tetap bisa terlihat penuh. */
   [data-section='0'] {
     scroll-margin-top: calc(var(--banner-h) - 1rem);
   }
   /*
-   * Jeda (Break): SENGAJA tanpa titik snap dan tanpa gerbang/penarik di engine. Diuji di Chromium
-   * (roda mouse 100px/notch): titik snap tengah-jeda (juga saat jeda masih 70vh) menjebak scroll di
-   * pusat jeda, karena notch yang berakhir dalam jarak ±0,3 viewport dari titik snap ditarik balik
-   * ke titik itu. Animasi jeda hanya menempel ke scroll (engine); flick cepat boleh melewati jeda
-   * dan engine tidak pernah menarik posisi scroll. Anti-skip = jeda lebih tinggi, animasi melebar
-   * ke tepi section, dan peredam delta roda di zona jeda (src/pointfield/wheeldamp.ts).
+   * Jeda (Break): SENGAJA tanpa titik snap sendiri dan tanpa gerbang/penarik di engine. Titik snap
+   * tengah-jeda menjebak scroll roda di pusat jeda (notch yang berakhir dalam ±0,3 viewport dari
+   * titik snap ditarik balik). Animasi jeda hanya menempel ke scroll (engine); engine tidak pernah
+   * menarik posisi scroll. Peredam roda (src/pointfield/wheeldamp.ts) hanya di zona animasi jeda.
    */
-
-  @media (prefers-reduced-motion: reduce) {
-    html {
-      scroll-snap-type: none;
-    }
-  }
 
   /*
    * Halo teks tipis: bayangan sangat lembut berwarna latar di sekitar paragraf dan judul,

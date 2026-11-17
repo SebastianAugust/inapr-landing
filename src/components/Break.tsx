@@ -25,6 +25,9 @@ const heightVars = {
  * - Sengaja tanpa titik scroll-snap dan tanpa gerbang (lihat komentar di global.css): snap
  *   tengah-jeda menjebak scroll roda mouse di pusat jeda, dan engine tidak pernah menggerakkan
  *   posisi scroll. Flick cepat boleh melewati jeda; animasinya hanya menempel ke scroll.
+ * - Jeda tercakup snap area section di atasnya (scroll-margin-bottom = tinggi jeda, variabel
+ *   --break-h-* di :root global.css; samakan dengan BREAK_HEIGHT): bukan titik snap, jadi scroll
+ *   di jeda bebas dan section pendek tidak menjebak roda di awalnya.
  * - Supaya tidak mudah terlewat: animasi melebar ke tepi section (edgeLeadVh/edgeTrailVh) dan
  *   roda mouse/trackpad diredam di zona jeda (scrollDamping, src/pointfield/wheeldamp.ts). Peredam
  *   hanya memperkecil delta roda pengguna; tidak pernah menarik posisi scroll.
