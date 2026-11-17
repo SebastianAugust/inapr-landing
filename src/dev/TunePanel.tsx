@@ -14,7 +14,6 @@ import {
   BREAK_HEIGHT,
   GEOMETRY_KEYS,
   POINTFIELD_DEFAULTS,
-  GATE,
   readStats,
   ZOOM_DIRECTIONS,
   type PointFieldParams,
@@ -39,7 +38,7 @@ const FALLBACK_READ_COLORS: ReadColors = {
 }
 const HEX = /^#[0-9a-f]{6}$/i
 
-type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections' | 'gateEnabled'>
+type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections'>
 type AngleKey = 'yaw' | 'pitch'
 
 interface Spec {
@@ -256,7 +255,6 @@ function sanitize(raw: unknown): PointFieldParams {
     const value = source[key]
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
   }
-  if (typeof source.gateEnabled === 'boolean') out.gateEnabled = source.gateEnabled
   for (const key of ['yaw', 'pitch'] as const) {
     const list = source[key]
     if (Array.isArray(list) && list.length === out[key].length && list.every((v) => typeof v === 'number' && Number.isFinite(v))) {
@@ -411,7 +409,7 @@ const tidy = (value: number) => Number(value.toFixed(4))
 
 /** Objek siap tempel ke src/config/pointfield.ts, plus warna baca (tokens.css) dan status snap. */
 function toSource(params: PointFieldParams, extras: Extras): string {
-  const lines = [...SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`), `  gateEnabled: ${params.gateEnabled},`]
+  const lines = SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)
   const list = (values: readonly number[]) => values.map(tidy).join(', ')
   const tokens = (theme: ThemeName) => READ_TOKENS.map((token, i) => '  ' + token + ': ' + extras.colors[theme][i] + ';')
   return [
@@ -612,8 +610,6 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         <span className="tp-muted">opasitas efektif</span> {debug.effective.toFixed(2)}
         {debug.safeZone.on && <span className="tp-muted"> · zona aman</span>}
         {' · '}
-        <span className="tp-muted">gerbang</span> {debug.gate.active ? 'jalan' : 'siap'} ({debug.gate.fires}×)
-        {' · '}
         <span className="tp-muted">bentuk</span> {debug.shape >= 0 ? BREAK_SHAPES[debug.shape] : '–'}
         <br />
         <span className="tp-muted">N</span> {debug.count} ({debug.device}) · <span className="tp-muted">FOV</span> {debug.fov.toFixed(1)}°
@@ -664,21 +660,11 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         ))}
 
         <fieldset className="tp-group">
-          <legend className="tp-legend">Tinggi jeda &amp; gerbang anti-skip</legend>
+          <legend className="tp-legend">Tinggi jeda</legend>
           <p className="tp-note">
             Tinggi diterapkan langsung (inline di tiap jeda) dan tersimpan di panel; nilai di config (BREAK_HEIGHT) baru berlaku
-            setelah menempel dan reload halaman. Gerbang: flick yang melewati &gt; {pct(GATE.minFraction)} tinggi satu jeda dalam {GATE.windowMs} ms
-            memicu scroll halus {GATE.durationMs} ms ke tengah jeda (sekali per lintasan); input pengguna membatalkan.
+            setelah menempel dan reload halaman. Jeda sengaja tanpa titik snap dan tanpa gerbang: flick boleh melewatinya.
           </p>
-          <div className="tp-row tp-colors">
-            <label htmlFor={uid + '-gate'}>Gerbang anti-skip aktif</label>
-            <input
-              id={uid + '-gate'}
-              type="checkbox"
-              checked={params.gateEnabled}
-              onChange={(event) => setParams((current) => ({ ...current, gateEnabled: event.target.checked }))}
-            />
-          </div>
           {(['desktop', 'mobile'] as const).map((key) => (
             <div key={key} className="tp-row">
               <label htmlFor={uid + '-bh-' + key}>{key === 'desktop' ? 'Desktop (vh, ≥ 768px)' : 'Mobile (svh, < 768px)'}</label>

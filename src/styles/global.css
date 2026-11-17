@@ -220,10 +220,11 @@ html.pf-grabbing * {
     scroll-margin-top: calc(var(--banner-h) - 1rem);
   }
   /*
-   * Jeda (Break): SENGAJA tanpa titik snap. Diuji di Chromium (roda mouse 100px/notch): titik
-   * snap tengah-jeda (juga saat jeda masih 70vh) menjebak scroll di pusat jeda, karena notch yang
-   * berakhir dalam jarak ±0,3 viewport dari titik snap ditarik balik ke titik itu. Anti-skip
-   * animasi jeda menempel ke scroll (engine), dan flick cepat ditangani gerbang di engine (GATE), bukan snap.
+   * Jeda (Break): SENGAJA tanpa titik snap dan tanpa gerbang/penarik di engine. Diuji di Chromium
+   * (roda mouse 100px/notch): titik snap tengah-jeda (juga saat jeda masih 70vh) menjebak scroll di
+   * pusat jeda, karena notch yang berakhir dalam jarak ±0,3 viewport dari titik snap ditarik balik
+   * ke titik itu. Animasi jeda hanya menempel ke scroll (engine); flick cepat boleh melewati jeda
+   * dan engine tidak pernah menggerakkan posisi scroll.
    */
 
   @media (prefers-reduced-motion: reduce) {

@@ -22,8 +22,9 @@ const heightVars = {
  * Kontrak dengan engine titik (src/pointfield/engine.ts):
  * - data-break={index} dan data-shape={nama bentuk}.
  * - Urutan scroll = urutan DOM dari [data-section] dan [data-break].
- * - Tanpa titik scroll-snap (lihat komentar di global.css): snap tengah-jeda menjebak scroll roda
- *   mouse di pusat jeda.
+ * - Sengaja tanpa titik scroll-snap dan tanpa gerbang (lihat komentar di global.css): snap
+ *   tengah-jeda menjebak scroll roda mouse di pusat jeda, dan engine tidak pernah menggerakkan
+ *   posisi scroll. Flick cepat boleh melewati jeda; animasinya hanya menempel ke scroll.
  */
 export function Break({ index }: BreakProps) {
   return (

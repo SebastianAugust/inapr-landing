@@ -37,12 +37,6 @@ export interface PointFieldParams {
    * langsung (T sampai di posisi scroll dalam ±0,2 detik).
    */
   smoothing: number
-  /**
-   * Gerbang lembut anti-skip (lihat GATE dan engine.ts). Flick cepat yang melewati satu jeda
-   * seluruhnya dalam GATE.windowMs memicu scroll halus ke tengah jeda itu (fase tahan), satu kali
-   * per lintasan, lalu kontrol kembali penuh ke pengguna. Mati di reduced motion dan saat navigasi.
-   */
-  gateEnabled: boolean
 
   // ---- Titik ----
   /** Jumlah titik per jenis perangkat (lihat pickDevice() di engine.ts). Satu draw call. */
@@ -197,7 +191,6 @@ export interface PointFieldParams {
 
 export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   smoothing: 0.28,
-  gateEnabled: true,
   countDesktop: 20000,
   countLowPower: 11000,
   countMobile: 7500,
@@ -276,22 +269,6 @@ export const GEOMETRY_KEYS = [
  */
 export const BREAK_HEIGHT = { desktop: 170, mobile: 140 } as const
 
-/**
- * Gerbang anti-skip (params.gateEnabled). Terpicu bila dalam windowMs posisi tengah viewport
- * bergerak MAJU melewati lebih dari minFraction tinggi satu jeda (mis. flick sebelum → sesudah
- * jeda). Lalu scroll halus (durationMs, easeInOutCubic) ke tengah jeda itu. Satu kali per jeda per
- * lintasan; cooldownMs antar pemicu; ignoreMs = ekor flick/momentum setelah pemicu yang tidak
- * dihitung sebagai pengambilalihan; suppressMs = jeda setelah navigasi (klik anchor, Home/End).
- */
-export const GATE = {
-  windowMs: 300,
-  minFraction: 0.8,
-  durationMs: 700,
-  cooldownMs: 1200,
-  ignoreMs: 120,
-  suppressMs: 2500,
-} as const
-
 /** Seed acak geometri: posisi dan penugasan titik bentuk sama di setiap kunjungan. */
 export const GEOMETRY_SEED = 20170101
 
@@ -307,7 +284,8 @@ export const ZOOM_FX = { streakMax: 3, fovSmoothing: 0.12, fovSpeedRef: 0.04 } a
 /**
  * Setelah scroll berhenti selama idleMs, bentuk yang setengah jadi diselesaikan ke
  * keadaan terdekat (utuh atau lepas) dengan faktor per frame `rate`. `scrollRate` =
- * faktor saat scroll aktif (hampir langsung mengikuti T).
+ * faktor saat scroll aktif (hampir langsung mengikuti T). Hanya mengubah intensitas
+ * animasi; posisi scroll tidak pernah digerakkan.
  */
 export const SETTLE = { idleMs: 450, rate: 0.07, scrollRate: 0.35 } as const
 
