@@ -38,7 +38,7 @@ const FALLBACK_READ_COLORS: ReadColors = {
 }
 const HEX = /^#[0-9a-f]{6}$/i
 
-type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections'>
+type ScalarKey = Exclude<keyof PointFieldParams, 'yaw' | 'pitch' | 'zoomDirections' | 'scrollDamping'>
 type AngleKey = 'yaw' | 'pitch'
 
 interface Spec {
@@ -87,8 +87,32 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
     ],
   },
   {
+    title: 'Scroll di jeda (anti-skip)',
+    note: 'Tanpa gerbang dan tanpa snap di jeda: posisi scroll tidak pernah ditarik. Peredam hanya memperkecil delta roda/trackpad di zona jeda (lead + jeda + trail) plus transisi; sentuhan, keyboard, dan drag scrollbar tetap native. Tepi 0 = mati.',
+    specs: [
+      {
+        key: 'scrollDampFactor',
+        label: 'Peredam: faktor di zona jeda (× jarak roda)',
+        min: 0.1,
+        max: 1,
+        step: 0.05,
+        hint: (p) => 'satu notch 100px → ±' + Math.round(100 * p.scrollDampFactor) + 'px di zona jeda (rentang uji 0,25–0,7)',
+      },
+      { key: 'scrollDampTransitionVh', label: 'Peredam: zona transisi (vh, tiap sisi)', min: 0, max: 100, step: 5 },
+      { key: 'edgeLeadVh', label: 'Tepi lead: zoom in mulai sebelum jeda (vh)', min: 0, max: 100, step: 5 },
+      {
+        key: 'edgeTrailVh',
+        label: 'Tepi trail: zoom out selesai sesudah jeda (vh)',
+        min: 0,
+        max: 100,
+        step: 5,
+        hint: (p) => 'rentang animasi desktop ≈ ' + Math.round(p.edgeLeadVh + BREAK_HEIGHT.desktop + p.edgeTrailVh) + 'vh (tepi dibatasi 40% tinggi section)',
+      },
+    ],
+  },
+  {
     title: 'Fase di jeda',
-    note: 'Fraksi progres jeda: zoom in 0 → akhir bentuk, tahan → akhir tahan, lalu lepas + zoom out → 1.',
+    note: 'Fraksi progres atas rentang efektif (lead + jeda + trail): zoom in 0 → akhir bentuk, tahan → akhir tahan, lalu lepas + zoom out → 1.',
     specs: [
       { key: 'phaseFormEnd', label: 'Akhir zoom in / bentuk', min: 0.05, max: 0.9, step: 0.01 },
       {
@@ -98,7 +122,7 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
         max: 0.95,
         step: 0.01,
         hint: (p) =>
-          'zoom in ' + pct(p.phaseFormEnd) + ' · tahan ' + pct(p.phaseHoldEnd - p.phaseFormEnd) + ' · lepas + zoom out ' + pct(1 - p.phaseHoldEnd) + ' dari tinggi jeda',
+          'zoom in ' + pct(p.phaseFormEnd) + ' · tahan ' + pct(p.phaseHoldEnd - p.phaseFormEnd) + ' · lepas + zoom out ' + pct(1 - p.phaseHoldEnd) + ' dari rentang efektif',
       },
       {
         key: 'zoomEase',
@@ -255,6 +279,7 @@ function sanitize(raw: unknown): PointFieldParams {
     const value = source[key]
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
   }
+  if (typeof source.scrollDamping === 'boolean') out.scrollDamping = source.scrollDamping
   for (const key of ['yaw', 'pitch'] as const) {
     const list = source[key]
     if (Array.isArray(list) && list.length === out[key].length && list.every((v) => typeof v === 'number' && Number.isFinite(v))) {
@@ -409,7 +434,7 @@ const tidy = (value: number) => Number(value.toFixed(4))
 
 /** Objek siap tempel ke src/config/pointfield.ts, plus warna baca (tokens.css) dan status snap. */
 function toSource(params: PointFieldParams, extras: Extras): string {
-  const lines = SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)
+  const lines = [`  scrollDamping: ${params.scrollDamping},`, ...SCALAR_KEYS.map((key) => `  ${key}: ${tidy(params[key])},`)]
   const list = (values: readonly number[]) => values.map(tidy).join(', ')
   const tokens = (theme: ThemeName) => READ_TOKENS.map((token, i) => '  ' + token + ': ' + extras.colors[theme][i] + ';')
   return [
@@ -611,6 +636,9 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         {debug.safeZone.on && <span className="tp-muted"> · zona aman</span>}
         {' · '}
         <span className="tp-muted">bentuk</span> {debug.shape >= 0 ? BREAK_SHAPES[debug.shape] : '–'}
+        {' · '}
+        <span className="tp-muted">peredam</span>{' '}
+        {debug.damp.enabled ? '×' + debug.damp.factor.toFixed(2) + (debug.damp.active ? ' jalan' : '') : debug.damp.navigating ? 'navigasi' : 'mati'}
         <br />
         <span className="tp-muted">N</span> {debug.count} ({debug.device}) · <span className="tp-muted">FOV</span> {debug.fov.toFixed(1)}°
         {' · '}
@@ -660,11 +688,20 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
         ))}
 
         <fieldset className="tp-group">
-          <legend className="tp-legend">Tinggi jeda</legend>
+          <legend className="tp-legend">Tinggi jeda &amp; peredam roda</legend>
           <p className="tp-note">
             Tinggi diterapkan langsung (inline di tiap jeda) dan tersimpan di panel; nilai di config (BREAK_HEIGHT) baru berlaku
-            setelah menempel dan reload halaman. Jeda sengaja tanpa titik snap dan tanpa gerbang: flick boleh melewatinya.
+            setelah menempel dan reload halaman. Jeda sengaja tanpa titik snap dan tanpa gerbang.
           </p>
+          <div className="tp-row tp-colors">
+            <label htmlFor={uid + '-damp'}>Peredam roda di zona jeda aktif</label>
+            <input
+              id={uid + '-damp'}
+              type="checkbox"
+              checked={params.scrollDamping}
+              onChange={(event) => setParams((current) => ({ ...current, scrollDamping: event.target.checked }))}
+            />
+          </div>
           {(['desktop', 'mobile'] as const).map((key) => (
             <div key={key} className="tp-row">
               <label htmlFor={uid + '-bh-' + key}>{key === 'desktop' ? 'Desktop (vh, ≥ 768px)' : 'Mobile (svh, < 768px)'}</label>

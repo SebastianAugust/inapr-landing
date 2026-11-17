@@ -38,6 +38,26 @@ export interface PointFieldParams {
    */
   smoothing: number
 
+  // ---- Scroll di jeda (lihat src/pointfield/wheeldamp.ts dan extendBreaks() di scrollmap.ts) ----
+  /**
+   * Peredam roda mouse/trackpad di zona jeda yang diperluas: satu flick tidak melompati seluruh
+   * jeda. Hanya event wheel (bukan sentuhan, keyboard, drag scrollbar); mati saat reduced motion
+   * dan selama navigasi anchor. Di perangkat sentuh swipe cepat TIDAK bisa diredam.
+   */
+  scrollDamping: boolean
+  /** Pengali jarak scroll roda di dalam zona jeda (1 = tanpa redam). Rentang uji 0,25–0,7. */
+  scrollDampFactor: number
+  /** Panjang zona transisi (vh) di luar tiap tepi zona: faktor berubah halus dari 1 ke scrollDampFactor. */
+  scrollDampTransitionVh: number
+  /**
+   * Animasi jeda melebar ke section di sekitarnya (vh): zoom in mulai edgeLeadVh sebelum jeda
+   * (akhir section sebelumnya), zoom out selesai edgeTrailVh sesudah jeda (awal section berikut).
+   * Progres fase dihitung atas lead + jeda + trail. Tiap tepi dibatasi EDGE.maxSectionFraction
+   * tinggi section-nya. 0 = mati.
+   */
+  edgeLeadVh: number
+  edgeTrailVh: number
+
   // ---- Titik ----
   /** Jumlah titik per jenis perangkat (lihat pickDevice() di engine.ts). Satu draw call. */
   countDesktop: number
@@ -87,8 +107,12 @@ export interface PointFieldParams {
   /** Drift kamera selama fase tahan (radian yaw total, dari -½ ke +½). */
   holdDrift: number
 
-  // ---- Fase di dalam jeda (fraksi progres jeda) ----
-  /** ZOOM IN + bentuk terbentuk: 0 → phaseFormEnd. TAHAN: phaseFormEnd → phaseHoldEnd. LEPAS + ZOOM OUT: phaseHoldEnd → 1. */
+  // ---- Fase di dalam jeda (fraksi progres atas rentang lead + jeda + trail) ----
+  /**
+   * ZOOM IN + bentuk terbentuk: 0 → phaseFormEnd. TAHAN: phaseFormEnd → phaseHoldEnd. LEPAS +
+   * ZOOM OUT: phaseHoldEnd → 1. Desktop default: 50 + 200 + 50 vh → zoom in ±129vh, tahan ±42vh,
+   * zoom out ±129vh.
+   */
   phaseFormEnd: number
   phaseHoldEnd: number
   /**
@@ -191,6 +215,11 @@ export interface PointFieldParams {
 
 export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   smoothing: 0.28,
+  scrollDamping: true,
+  scrollDampFactor: 0.4,
+  scrollDampTransitionVh: 30,
+  edgeLeadVh: 50,
+  edgeTrailVh: 50,
   countDesktop: 20000,
   countLowPower: 11000,
   countMobile: 7500,
@@ -211,8 +240,8 @@ export const POINTFIELD_DEFAULTS: Readonly<PointFieldParams> = Object.freeze({
   zoomReach: 11,
   pathCurve: 0.7,
   holdDrift: 0.04,
-  phaseFormEnd: 0.42,
-  phaseHoldEnd: 0.55,
+  phaseFormEnd: 0.43,
+  phaseHoldEnd: 0.57,
   zoomEase: 0.6,
   shapeSize: 0.45,
   shapeMaxWidth: 0.8,
@@ -265,9 +294,39 @@ export const GEOMETRY_KEYS = [
 /**
  * Tinggi satu jeda (Break): desktop dalam vh, mobile dalam svh (di bawah breakpoint md Tailwind,
  * 768px; svh stabil saat bar alamat muncul/menyusut). Tanpa teks; canvas fixed, jadi jeda yang
- * tinggi terasa "berat": animasi menempel ke scroll sepanjang jeda.
+ * tinggi terasa "berat": animasi menempel ke scroll sepanjang jeda. Ditambah tepi lead/trail
+ * (edgeLeadVh/edgeTrailVh) dan peredam roda (scrollDamping) supaya scroll cepat tidak melompatinya.
  */
-export const BREAK_HEIGHT = { desktop: 170, mobile: 140 } as const
+export const BREAK_HEIGHT = { desktop: 200, mobile: 150 } as const
+
+/**
+ * Tepi animasi jeda (edgeLeadVh/edgeTrailVh): tiap tepi paling banyak maxSectionFraction tinggi
+ * section yang dimasukinya, jadi section pendek tetap punya bagian netral (≥ 1 − 2 × 0,4 = 20%).
+ */
+export const EDGE = { maxSectionFraction: 0.4 } as const
+
+/**
+ * Peredam roda (src/pointfield/wheeldamp.ts):
+ * - lerp: faktor kejar scrollY → posisi target per frame 60 fps (dikonversi ke dt nyata).
+ * - snapPx: selisih di bawah ini ditulis langsung ke target; stopPx: loop berhenti.
+ * - externalPx: scrollY berbeda lebih dari ini dari tulisan terakhir = diubah sumber lain → sinkron.
+ * - linePx: deltaMode baris → piksel; chunkPx: langkah integrasi faktor sepanjang satu delta.
+ * - maxDeltaVh: batas satu event (vh) supaya delta aneh tidak melompat jauh.
+ * - navIdleMs/navMaxMs: peredam mati selama navigasi anchor, sampai scroll diam/scrollend
+ *   (atau batas aman).
+ */
+export const DAMP = {
+  lerp: 0.2,
+  snapPx: 2,
+  stopPx: 0.5,
+  externalPx: 1.5,
+  linePx: 40,
+  chunkPx: 8,
+  maxDeltaVh: 150,
+  navIdleMs: 150,
+  navStartMs: 400,
+  navMaxMs: 2500,
+} as const
 
 /** Seed acak geometri: posisi dan penugasan titik bentuk sama di setiap kunjungan. */
 export const GEOMETRY_SEED = 20170101

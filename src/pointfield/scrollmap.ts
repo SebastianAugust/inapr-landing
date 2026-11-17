@@ -5,6 +5,8 @@
  * Urutan scroll = urutan DOM dari [data-section] (section 1..8) dan [data-break] (jeda
  * pendek di antara section). Skalar T = indeks elemen + progres di dalamnya, diukur dari
  * titik tengah layar. Section selalu netral (tanpa bentuk); bentuk hanya ada di jeda.
+ * Engine memberi rentang EFEKTIF (extendBreaks): jeda + lead/trail ke tepi section, jadi
+ * "jeda" di sini mencakup tepi itu dan "section" hanya bagian netralnya.
  */
 import type { PointFieldParams } from '@/config/pointfield'
 
@@ -62,6 +64,46 @@ export function phaseBounds(params: Pick<PointFieldParams, 'phaseFormEnd' | 'pha
   const form = Math.min(0.9, Math.max(0.05, params.phaseFormEnd))
   const hold = Math.min(0.95, Math.max(form + 0.01, params.phaseHoldEnd))
   return [form, hold]
+}
+
+/**
+ * Rentang efektif urutan scroll (partisi tanpa celah/tumpang tindih), ditulis ke outTops/outHeights:
+ * tiap jeda melebar `leadPx` ke akhir section sebelumnya dan `trailPx` ke awal section sesudahnya
+ * (masing-masing paling banyak maxFraction × tinggi section itu); section menyusut sebanyak itu.
+ * Dengan begitu progres jeda (dan fasenya) dihitung atas lead + jeda + trail, section tetap netral
+ * di luar rentang itu, dan rotasi pandang section baru mulai setelah trail selesai. 0 = tanpa tepi.
+ */
+export function extendBreaks(
+  seq: readonly Pick<SeqItem, 'kind'>[],
+  tops: Float64Array,
+  heights: Float64Array,
+  leadPx: number,
+  trailPx: number,
+  maxFraction: number,
+  outTops: Float64Array,
+  outHeights: Float64Array,
+): void {
+  const n = seq.length
+  const frac = Math.min(0.45, Math.max(0, maxFraction))
+  const lead = Math.max(0, leadPx)
+  const trail = Math.max(0, trailPx)
+  // outHeights menampung posisi AKHIR tiap elemen dulu, lalu dikonversi ke tinggi di bawah.
+  for (let i = 0; i < n; i++) {
+    outTops[i] = tops[i]
+    outHeights[i] = tops[i] + heights[i]
+  }
+  for (let i = 0; i < n; i++) {
+    if (seq[i].kind !== 'break') continue
+    if (i > 0 && seq[i - 1].kind === 'section') {
+      outTops[i] = tops[i] - Math.min(lead, frac * heights[i - 1])
+      outHeights[i - 1] = outTops[i]
+    }
+    if (i < n - 1 && seq[i + 1].kind === 'section') {
+      outHeights[i] = tops[i] + heights[i] + Math.min(trail, frac * heights[i + 1])
+      outTops[i + 1] = outHeights[i]
+    }
+  }
+  for (let i = 0; i < n; i++) outHeights[i] = Math.max(1, outHeights[i] - outTops[i])
 }
 
 /**

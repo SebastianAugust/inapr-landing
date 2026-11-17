@@ -14,7 +14,7 @@ const heightVars = {
 } as CSSProperties
 
 /**
- * Jeda (celah) di antara section: hanya ruang scroll (±1 layar), tanpa teks. Di sini engine
+ * Jeda (celah) di antara section: hanya ruang scroll (±2 layar), tanpa teks. Di sini engine
  * titik 3D melakukan zoom-in ke satu sisi layar, membentuk satu bentuk, lalu zoom-out.
  * Tinggi dari BREAK_HEIGHT (src/config/pointfield.ts); breakpoint md (768px) = batas
  * mobile/desktop.
@@ -25,6 +25,9 @@ const heightVars = {
  * - Sengaja tanpa titik scroll-snap dan tanpa gerbang (lihat komentar di global.css): snap
  *   tengah-jeda menjebak scroll roda mouse di pusat jeda, dan engine tidak pernah menggerakkan
  *   posisi scroll. Flick cepat boleh melewati jeda; animasinya hanya menempel ke scroll.
+ * - Supaya tidak mudah terlewat: animasi melebar ke tepi section (edgeLeadVh/edgeTrailVh) dan
+ *   roda mouse/trackpad diredam di zona jeda (scrollDamping, src/pointfield/wheeldamp.ts). Peredam
+ *   hanya memperkecil delta roda pengguna; tidak pernah menarik posisi scroll.
  */
 export function Break({ index }: BreakProps) {
   return (

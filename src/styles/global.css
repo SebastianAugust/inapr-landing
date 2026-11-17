@@ -224,7 +224,8 @@ html.pf-grabbing * {
    * (roda mouse 100px/notch): titik snap tengah-jeda (juga saat jeda masih 70vh) menjebak scroll di
    * pusat jeda, karena notch yang berakhir dalam jarak ±0,3 viewport dari titik snap ditarik balik
    * ke titik itu. Animasi jeda hanya menempel ke scroll (engine); flick cepat boleh melewati jeda
-   * dan engine tidak pernah menggerakkan posisi scroll.
+   * dan engine tidak pernah menarik posisi scroll. Anti-skip = jeda lebih tinggi, animasi melebar
+   * ke tepi section, dan peredam delta roda di zona jeda (src/pointfield/wheeldamp.ts).
    */
 
   @media (prefers-reduced-motion: reduce) {
