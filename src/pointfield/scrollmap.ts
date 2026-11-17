@@ -113,49 +113,50 @@ export function dampFactorAt(
   return 1
 }
 
-type BrakeParams = Pick<PointFieldParams, 'brakeFactor' | 'brakeBeforeVh' | 'brakeAfterVh'>
+type ZoneParams = Pick<PointFieldParams, 'sectionBrakeZoneBeforeVh' | 'sectionBrakeZoneAfterVh'>
 
 /**
- * Bobot "rem magnetik" di awal section (bell 0..1) pada d = scrollY − yRem dalam vh: naik
- * (smoothstep) dari 0 di d = −brakeBeforeVh ke 1 di d = 0, turun (smoothstep) ke 0 di
- * d = +brakeAfterVh. Sisi dengan panjang 0 = tanpa rem di sisi itu. Kontinu di semua d.
+ * Bobot zona rem kedatangan (bell 0..1) pada d = scrollY − yRem dalam vh: naik (smoothstep) dari 0
+ * di d = −before ke 1 di d = 0, turun (smoothstep) ke 0 di d = +after. Sisi dengan panjang 0 =
+ * tanpa zona di sisi itu. Kontinu di semua d.
  */
-export function brakeWeight(dVh: number, params: Pick<PointFieldParams, 'brakeBeforeVh' | 'brakeAfterVh'>): number {
-  const before = Math.max(0, params.brakeBeforeVh)
-  const after = Math.max(0, params.brakeAfterVh)
+export function brakeZoneWeight(dVh: number, params: ZoneParams): number {
+  const before = Math.max(0, params.sectionBrakeZoneBeforeVh)
+  const after = Math.max(0, params.sectionBrakeZoneAfterVh)
   if (dVh < 0) return before > 0 ? smoothstep(-before, 0, dVh) : 0
   if (dVh > 0) return after > 0 ? 1 - smoothstep(0, after, dVh) : 0
   return before > 0 || after > 0 ? 1 : 0
 }
 
-/** Faktor rem pada d (vh): lerp(1, brakeFactor, bobot). 1 di luar jendela. */
-export function brakeFactorAtDelta(dVh: number, params: BrakeParams): number {
-  const inner = Math.min(1, Math.max(0.05, params.brakeFactor))
-  return lerp(1, inner, brakeWeight(dVh, params))
+/** Bobot zona terbesar di posisi scroll `y` atas semua posisi rem (px; `vh` = 1vh dalam px). */
+export function brakeZoneAt(y: number, rems: readonly number[], vh: number, params: ZoneParams): number {
+  let w = 0
+  for (const rem of rems) w = Math.max(w, brakeZoneWeight((y - rem) / vh, params))
+  return w
 }
 
 /**
- * Faktor rem di posisi scroll `y` (px dokumen): minimum atas semua posisi rem `rems` (scrollY
- * saat judul section tepat di bawah navbar = posisi snap CSS). `vh` = 1vh dalam px.
+ * Ada zona rem (−before..+after di sekitar salah satu yRem) di rentang [y, y + dir × distPx]?
+ * Untuk mengambil alih input cepat sebelum zona.
  */
-export function brakeFactorAt(y: number, rems: readonly number[], vh: number, params: BrakeParams): number {
-  let factor = 1
-  for (const rem of rems) {
-    const f = brakeFactorAtDelta((y - rem) / vh, params)
-    if (f < factor) factor = f
-  }
-  return factor
+export function brakeZoneAhead(y: number, dir: number, distPx: number, rems: readonly number[], vh: number, params: ZoneParams): boolean {
+  const lo = dir >= 0 ? y : y - distPx
+  const hi = dir >= 0 ? y + distPx : y
+  const before = Math.max(0, params.sectionBrakeZoneBeforeVh) * vh
+  const after = Math.max(0, params.sectionBrakeZoneAfterVh) * vh
+  for (const rem of rems) if (rem - before <= hi && rem + after >= lo && before + after > 0) return true
+  return false
 }
 
-/** Setara berat rem saja (vh): ∫ 1/faktorRem sepanjang jendela −before..+after (tanpa rem = panjang jendela). */
-export function brakeEquivalentVh(params: BrakeParams, steps = 512): number {
-  const before = Math.max(0, params.brakeBeforeVh)
-  const after = Math.max(0, params.brakeAfterVh)
-  const span = before + after
-  if (span <= 0) return 0
-  let sum = 0
-  for (let i = 0; i < steps; i++) sum += 1 / brakeFactorAtDelta(-before + ((i + 0.5) / steps) * span, params)
-  return (span * sum) / steps
+/**
+ * Bobot "tahan kedatangan" `elapsedMs` setelah yRem dilintasi: 1 selama holdMs, lalu turun halus
+ * (smoothstep) ke 0 sepanjang releaseMs. Kontinu (tanpa lompatan).
+ */
+export function holdWeight(elapsedMs: number, holdMs: number, releaseMs: number): number {
+  // holdMs 0 = tahan kedatangan mati.
+  if (!(elapsedMs >= 0) || !(holdMs > 0)) return 0
+  if (elapsedMs <= holdMs) return 1
+  return releaseMs > 0 ? 1 - smoothstep(0, releaseMs, elapsedMs - holdMs) : 0
 }
 
 /**

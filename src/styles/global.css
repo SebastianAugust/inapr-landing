@@ -208,12 +208,15 @@ html.pf-grabbing * {
    * Titik snap. Section: awal section (di bawah navbar sticky lewat scroll-padding-top).
    * Section lebih tinggi dari viewport (terutama mobile) tetap bebas digulir: untuk snap area
    * yang lebih besar dari snapport, posisi mana pun yang menutupi snapport adalah posisi
-   * snap yang sah, jadi isinya tidak terpotong atau terkunci. scroll-snap-stop: normal
-   * (default) = scroll cepat boleh melewati titik snap.
+   * snap yang sah, jadi isinya tidak terpotong atau terkunci.
+   * scroll-snap-stop: always = scroll BERARAH (fling sentuh, PageDown/Space, roda native, scrollBy
+   * peredam) tidak boleh melewati awal section dalam satu gerakan; berhenti di judul, gerakan
+   * berikutnya lanjut. Tipe tetap proximity (bukan mandatory): jeda sengaja tanpa titik snap.
+   * Roda/trackpad cepat juga diredam rem kedatangan di engine (params.scrollBrake).
    */
   [data-section] {
     scroll-snap-align: start;
-    scroll-snap-stop: normal;
+    scroll-snap-stop: always;
   }
   /* Section pertama: titik snap di scrollY = 0, supaya banner draf tetap bisa terlihat penuh. */
   [data-section='0'] {

@@ -14,6 +14,7 @@ import {
   BREAK_HEIGHT,
   GEOMETRY_KEYS,
   POINTFIELD_DEFAULTS,
+  SECTION_BRAKE,
   readStats,
   ZOOM_DIRECTIONS,
   type PointFieldParams,
@@ -21,7 +22,7 @@ import {
 } from '@/config/pointfield'
 import { BREAK_SHAPES, SECTION_IDS } from '@/lib/sections'
 import type { PointFieldDebug, PointFieldEngine } from '@/pointfield/engine'
-import { brakeEquivalentVh, dampEquivalentVh } from '@/pointfield/scrollmap'
+import { dampEquivalentVh } from '@/pointfield/scrollmap'
 
 const STORAGE_KEY = 'inapr-tune'
 const REBUILD_DELAY = 300
@@ -120,16 +121,33 @@ const GROUPS: { title: string; note?: string; specs: Spec[] }[] = [
           Math.round(dampEquivalentVh(p.edgeLeadVh + BREAK_HEIGHT.mobile + p.edgeTrailVh, p)) +
           'vh (tinggi jeda dari config; nilai panel di bawah)',
       },
+      { key: 'sectionBrakeZoneBeforeVh', label: 'Rem kedatangan: zona sebelum judul (vh)', min: 0, max: 100, step: 5 },
+      { key: 'sectionBrakeZoneAfterVh', label: 'Rem kedatangan: zona sesudah judul (vh)', min: 0, max: 100, step: 5 },
       {
-        key: 'brakeFactor',
-        label: 'Rem awal section: faktor tepat di judul (× jarak roda)',
-        min: 0.1,
+        key: 'sectionBrakeFactor',
+        label: 'Rem kedatangan: faktor untuk input cepat (× jarak roda)',
+        min: 0.05,
         max: 1,
         step: 0.05,
-        hint: (p) => 'satu notch 100px → ±' + Math.round(100 * p.brakeFactor) + 'px tepat di posisi judul (= posisi snap)',
+        hint: () =>
+          'hanya input cepat: di bawah ' + SECTION_BRAKE.slowPxS + ' px/s (roda/trackpad biasa) tidak berubah, penuh di atas ' + SECTION_BRAKE.fastPxS + ' px/s',
       },
-      { key: 'brakeBeforeVh', label: 'Rem: mulai sebelum judul (vh)', min: 0, max: 80, step: 5 },
-      { key: 'brakeAfterVh', label: 'Rem: berakhir sesudah judul (vh)', min: 0, max: 80, step: 5 },
+      {
+        key: 'maxDeltaPerFrame',
+        label: 'Rem kedatangan: batas gerak per frame (px, input cepat)',
+        min: 1,
+        max: 60,
+        step: 1,
+        hint: (p) => '≈ ' + Math.round(p.maxDeltaPerFrame * 60) + ' px/s di judul; input berlebih dibuang (tidak ditarik balik)',
+      },
+      {
+        key: 'sectionHoldMs',
+        label: 'Rem kedatangan: tahan setelah judul dilintasi (ms)',
+        min: 0,
+        max: 1500,
+        step: 25,
+        hint: (p) => (p.sectionHoldMs > 0 ? 'lalu pulih halus ' + SECTION_BRAKE.releaseMs + ' ms' : 'tahan mati'),
+      },
       { key: 'edgeLeadVh', label: 'Tepi lead: zoom in mulai sebelum jeda (vh)', min: 0, max: 100, step: 5 },
       {
         key: 'edgeTrailVh',
@@ -747,7 +765,7 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
             />
           </div>
           <div className="tp-row tp-colors">
-            <label htmlFor={uid + '-brake'}>Rem magnetik di awal section aktif</label>
+            <label htmlFor={uid + '-brake'}>Rem kedatangan di awal section aktif</label>
             <input
               id={uid + '-brake'}
               type="checkbox"
@@ -756,10 +774,8 @@ export function TunePanel({ engine }: { engine: PointFieldEngine }) {
             />
           </div>
           <p className="tp-note">
-            Rem saja: jendela {Math.round(params.brakeBeforeVh + params.brakeAfterVh)}vh → setara ≈{' '}
-            {Math.round(brakeEquivalentVh(params))}vh. Perjalanan jeda → section (awal rentang jeda sampai yRem +{' '}
-            {params.brakeAfterVh}vh, gabungan min): {debug.trips.length ? debug.trips.map((t) => Math.round(t.equivVh)).join(' / ') : '–'}vh setara
-            {debug.trips.length ? ' dari ' + debug.trips.map((t) => Math.round(t.lengthVh)).join(' / ') + 'vh' : ''}.
+            Rem kedatangan sekarang: zona {debug.damp.brake.toFixed(2)} · tahan {debug.damp.hold.toFixed(2)} · kecepatan roda {Math.round(debug.damp.speed)} px/s (bobot{' '}
+            {debug.damp.speedWeight.toFixed(2)}) · input dibuang {Math.round(debug.damp.discarded)} px.
           </p>
           {(['desktop', 'mobile'] as const).map((key) => (
             <div key={key} className="tp-row">
