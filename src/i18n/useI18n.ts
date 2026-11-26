@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { storageGet, storageSet } from '@/lib/storage'
 import { id } from './id'
+import type { PageKey } from '@/lib/routes'
 import type { Dictionary, Lang } from './types'
 
 /** Harus sama dengan script di index.html. */
@@ -48,12 +49,20 @@ const IS_BROWSER = typeof document !== 'undefined'
 let lang: Lang = 'id'
 const listeners = new Set<() => void>()
 
-/** <html lang>, judul dokumen, dan meta description ikut bahasa aktif. */
+/** Halaman yang sedang dibuka (diset src/bootstrap.tsx sebelum render); menentukan judul + deskripsi dokumen. */
+let pageKey: PageKey = 'home'
+
+export function setPageKey(page: PageKey): void {
+  pageKey = page
+}
+
+/** <html lang>, judul dokumen, dan meta description ikut bahasa aktif dan halaman. */
 function applyDocument(next: Lang): void {
   const dict = dictionaryOf(next)
+  const meta = pageKey === 'home' ? dict.meta : dict.pageMeta[pageKey]
   document.documentElement.lang = next
-  document.title = dict.meta.title
-  document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute('content', dict.meta.description)
+  document.title = meta.title
+  document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute('content', meta.description)
 }
 
 /**

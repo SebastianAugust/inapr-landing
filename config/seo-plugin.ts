@@ -1,4 +1,6 @@
 import type { HtmlTagDescriptor, Plugin } from 'vite'
+import { resolve } from 'node:path'
+import { PAGES, previewNotFound, routeRewrite, type PageDef } from './pages.ts'
 
 /**
  * JSON-LD Organization. HANYA fakta asli dari situs lama:
@@ -39,6 +41,38 @@ const PRELOAD_FONT = /(montserrat-latin-(300|800)|hind-siliguri-latin-400)-norma
 const ENGINE_SOURCE = /\/src\/pointfield\/engine\.ts$/
 
 /**
+ * Script anti-flash tema + bahasa untuk halaman selain index.html (index.html memuat salinannya sendiri).
+ * Kunci localStorage harus sama dengan src/hooks/useTheme.ts dan src/i18n/useI18n.ts.
+ */
+const THEME_SCRIPT = `;(function () {
+  var root = document.documentElement
+  var pref = null
+  var lang = null
+  try {
+    pref = localStorage.getItem('inapr-theme')
+    lang = localStorage.getItem('inapr-lang')
+  } catch (e) {}
+  var theme = pref === 'light' || pref === 'dark' ? pref : null
+  if (!theme) {
+    var dark = false
+    try {
+      dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    } catch (e) {}
+    theme = dark ? 'dark' : 'light'
+  }
+  root.setAttribute('data-theme', theme)
+  root.setAttribute('lang', lang === 'en' ? 'en' : 'id')
+  var bar = theme === 'dark' ? '#250001' : '#f1e9e4'
+  var metas = document.querySelectorAll('meta[name="theme-color"]')
+  for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', bar)
+})()`
+
+/** Sama dengan <noscript><style> di index.html: sembunyikan kontrol yang butuh JS, tampilkan menu di mobile. */
+const NOSCRIPT_STYLE = `<style>.js-only{display:none !important}@media (max-width:767px){#site-menu{display:flex !important;order:3;flex-basis:100%;position:static !important;box-shadow:none !important;border:0 !important;padding:0 0 1rem !important}}</style>`
+
+const NOSCRIPT_NOTICE = `<p class="m-0 border-b border-line bg-soft px-4 py-3 text-center text-[0.92rem] text-ink">JavaScript nonaktif. Isi halaman tetap bisa dibaca; formulir, pencarian, dan pilihan tema/bahasa memerlukan JavaScript. <span lang="en">JavaScript is off: the content stays readable, forms and search need JavaScript.</span></p>`
+
+/**
  * URL situs dari VITE_SITE_URL, dinormalisasi ke "https://host/path/".
  * Kosong → null (tag kanonik/og:url/sitemap tidak dipasang). Tidak valid → build gagal.
  */
@@ -73,6 +107,12 @@ export function seo(siteUrl: string | undefined): Plugin {
   const absolute = (path: string) => (site ? new URL(path, site).href : `${base}${path}`)
   let ssr = false
 
+  /** Alamat kanonik halaman: situs + rute tanpa slash awal ("/" = situs itu sendiri). Hanya dipakai bila `site` ada. */
+  const pageUrl = (page: PageDef): string =>
+    site && page.route && page.route !== '/' ? new URL(page.route.slice(1), site).href : (site?.href ?? '')
+  const pageOf = (path: string | undefined): PageDef =>
+    PAGES.find((p) => p.file !== 'index.html' && path?.endsWith(`/${p.file}`)) ?? PAGES[0]
+
   return {
     name: 'inapr-seo',
     configResolved(config) {
@@ -86,9 +126,19 @@ export function seo(siteUrl: string | undefined): Plugin {
           : configured
       ssr = Boolean(config.build.ssr)
     },
+    configureServer(server) {
+      // Dev: rute situs (/daftar, /kegiatan/abc) dilayani seperti di hosting.
+      server.middlewares.use(routeRewrite(base))
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(routeRewrite(base))
+      server.middlewares.use(previewNotFound(base, resolve(server.config.root, server.config.build.outDir)))
+    },
     transformIndexHtml: {
       order: 'post',
       handler(_html, ctx) {
+        const page = pageOf(ctx.path)
+        const home = page.key === 'home'
         const meta = (attrs: Record<string, string>): HtmlTagDescriptor => ({ tag: 'meta', attrs, injectTo: 'head' })
         const image = absolute(OG_IMAGE.path)
         const tags: HtmlTagDescriptor[] = [
@@ -98,22 +148,43 @@ export function seo(siteUrl: string | undefined): Plugin {
           meta({ property: 'og:image:alt', content: 'INAPR · Indonesian Association for Pattern Recognition' }),
           meta({ name: 'twitter:image', content: image }),
         ]
-        if (DRAFT_NOINDEX) tags.push(meta({ name: 'robots', content: 'noindex, nofollow' }))
-        if (site) {
-          tags.push({ tag: 'link', attrs: { rel: 'canonical', href: site.href }, injectTo: 'head' })
-          tags.push(meta({ property: 'og:url', content: site.href }))
+        // Draf ATAU halaman yang memang tidak boleh diindeks (formulir, 404): noindex.
+        if (DRAFT_NOINDEX || !page.indexable) tags.push(meta({ name: 'robots', content: 'noindex, nofollow' }))
+        if (site && page.canonical !== false) {
+          const href = pageUrl(page)
+          tags.push({ tag: 'link', attrs: { rel: 'canonical', href }, injectTo: 'head' })
+          tags.push(meta({ property: 'og:url', content: href }))
         }
-        tags.push({
-          tag: 'script',
-          attrs: { type: 'application/ld+json' },
-          children: JSON.stringify(site ? { ...ORGANIZATION, url: site.href } : ORGANIZATION),
-          injectTo: 'head',
-        })
+        if (home) {
+          tags.push({
+            tag: 'script',
+            attrs: { type: 'application/ld+json' },
+            children: JSON.stringify(site ? { ...ORGANIZATION, url: site.href } : ORGANIZATION),
+            injectTo: 'head',
+          })
+        } else {
+          // Halaman lain: kepala dokumen yang di index.html ditulis tangan.
+          tags.push(
+            meta({ name: 'color-scheme', content: 'light dark' }),
+            meta({ name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#f1e9e4' }),
+            meta({ name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#250001' }),
+            meta({ property: 'og:type', content: 'website' }),
+            meta({ property: 'og:site_name', content: 'INAPR' }),
+            meta({ property: 'og:locale', content: 'id_ID' }),
+            meta({ property: 'og:locale:alternate', content: 'en_GB' }),
+            meta({ name: 'twitter:card', content: 'summary_large_image' }),
+            { tag: 'link', attrs: { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }, injectTo: 'head' },
+            { tag: 'link', attrs: { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }, injectTo: 'head' },
+            { tag: 'script', children: THEME_SCRIPT, injectTo: 'head-prepend' },
+            { tag: 'noscript', children: NOSCRIPT_STYLE, injectTo: 'head' },
+            { tag: 'noscript', children: NOSCRIPT_NOTICE, injectTo: 'body-prepend' },
+          )
+        }
         for (const [file, output] of Object.entries(ctx.bundle ?? {})) {
           // Chunk engine (three.js, ±124 kB brotli) tidak dibutuhkan untuk render pertama, tetapi
           // pasti diminta setelah load + idle. Prefetch = prioritas terendah, mengisi cache lebih awal
           // dan memutus rantai HTML → JS utama → engine. crossorigin = mode yang sama dengan import().
-          if (output.type === 'chunk' && output.isDynamicEntry && ENGINE_SOURCE.test(output.facadeModuleId ?? '')) {
+          if (home && output.type === 'chunk' && output.isDynamicEntry && ENGINE_SOURCE.test(output.facadeModuleId ?? '')) {
             tags.push({
               tag: 'link',
               attrs: { rel: 'prefetch', as: 'script', href: `${base}${file}`, crossorigin: '' },
@@ -133,7 +204,7 @@ export function seo(siteUrl: string | undefined): Plugin {
     },
     generateBundle() {
       if (ssr) return
-      // Sitemap hanya diumumkan bila situs boleh diindeks (lihat DRAFT_NOINDEX).
+      // Sitemap hanya diumumkan bila situs boleh diindeks (lihat DRAFT_NOINDEX), dan hanya memuat halaman indexable.
       const sitemap = DRAFT_NOINDEX ? null : site
       const robots = DRAFT_NOINDEX
         ? ['# Draf: jangan diindeks. Dicabut lewat DRAFT_NOINDEX di config/seo-plugin.ts.', 'User-agent: *', 'Disallow: /']
@@ -144,7 +215,9 @@ export function seo(siteUrl: string | undefined): Plugin {
         this.emitFile({
           type: 'asset',
           fileName: 'sitemap.xml',
-          source: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${sitemap.href}</loc></url>\n</urlset>\n`,
+          source: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${PAGES.filter((p) => p.indexable && p.route && p.canonical !== false)
+            .map((p) => `  <url><loc>${pageUrl(p)}</loc></url>\n`)
+            .join('')}</urlset>\n`,
         })
       }
     },

@@ -10,7 +10,8 @@ Butuh Node.js 20.19+ atau 22.12+ (syarat Vite 8; dikembangkan dengan Node 24).
 ```bash
 npm install
 npm run dev       # dev server (http://localhost:5173)
-npm run build     # cek tipe, build ke dist/, lalu prerender HTML ke dist/index.html
+npm run build     # cek tipe, build ke dist/ (base "/", untuk Vercel), lalu prerender HTML semua halaman
+npm run build:embed  # sama, tetapi base "/landing/" (untuk di-embed ke app Next)
 npm run preview   # sajikan dist/ secara lokal (cek hasil build)
 npm run lint      # oxlint, termasuk semua aturan jsx-a11y
 npm run data      # buat ulang src/data/*.json dari arsip situs lama
@@ -22,13 +23,13 @@ npm run og        # buat ulang favicon, apple-touch-icon, dan gambar OG
 1. `tsc -b` untuk cek tipe.
 2. `vite build` untuk bundel klien.
 3. `vite build --ssr` untuk bundel sementara di `dist-ssr/`.
-4. `scripts/prerender.mjs`, yang menulis HTML hasil render ke `#root`.
+4. `scripts/prerender.mjs`, yang menulis HTML hasil render ke `#root` di setiap halaman (`config/pages.json`).
 
 Karena prerender, halaman sudah terbaca sebelum JavaScript jalan, bahkan tanpa JavaScript sama
 sekali. Setelah JS dimuat, React **menghidrasi** HTML itu (`hydrateRoot`, DOM dipakai ulang) bila bahasa
 tersimpan Indonesia/belum ada; bahasa tersimpan Inggris memakai `createRoot` (render ulang penuh). Tema dan
 tahun footer disesuaikan setelah hidrasi lewat `getServerSnapshot`, jadi tidak ada hydration mismatch. Bila
-komponen yang dirender saat prerender berubah, pastikan render pertama klien tetap identik (lihat `src/main.tsx`).
+komponen yang dirender saat prerender berubah, pastikan render pertama klien tetap identik (lihat `src/bootstrap.tsx`).
 
 Untuk deploy, unggah seluruh isi `dist/`. Panduan Vercel (CLI dan GitHub, domain, rollback,
 mencabut noindex): [docs/DEPLOY-VERCEL.md](docs/DEPLOY-VERCEL.md).
@@ -36,29 +37,38 @@ mencabut noindex): [docs/DEPLOY-VERCEL.md](docs/DEPLOY-VERCEL.md).
 ## Struktur folder
 
 ```
-config/seo-plugin.ts    Plugin Vite: og:image, kanonik, JSON-LD, preload font, robots.txt, sitemap.xml
+config/pages.json       daftar halaman (kunci, berkas, rute situs, indexable); satu sumber untuk build + prerender
+config/pages.ts         pembaca pages.json + middleware rewrite rute situs untuk dev/preview
+config/seo-plugin.ts    Plugin Vite: kepala dokumen per halaman, og:image, kanonik, JSON-LD, preload font, robots.txt, sitemap.xml
+index.html + *.html     satu berkas HTML per halaman (daftar, kegiatan, kegiatan-detail, webinar, anggota, kontak, privasi, 404)
 docs/DEPLOY-VERCEL.md   panduan deploy ke Vercel
-public/                 favicon.svg, apple-touch-icon.png, og.png (dibuat oleh scripts/make-og.mjs), 404.html
+docs/ROUTING.md         rute situs → berkas, rewrite Vercel dan Next
+docs/KONTRAK-DATA.md    kontrak API landing ↔ backend (anggota, arsip, kegiatan, pendaftaran)
+docs/OVERNIGHT-*.md     log keputusan dan laporan pengerjaan multi-halaman
+public/                 favicon.svg, apple-touch-icon.png, og.png (dibuat oleh scripts/make-og.mjs)
 vercel.json             konfigurasi Vercel: build, header cache/keamanan, noindex selama draf
 scripts/
   build-data.mjs        arsip inapr.org → src/data/*.json (sekali jalan)
   make-og.mjs           ikon + gambar OG dari kode (butuh devDependency sharp)
   prerender.mjs         langkah terakhir build
 src/
-  main.tsx              entri klien (font, CSS global, render <App />)
-  entry-server.tsx      entri prerender
+  main.tsx              entri klien home (memanggil mountPage)
+  bootstrap.tsx         mountPage: font, CSS global, hidrasi/render satu halaman
+  entries/              entri klien halaman lain (4 baris tiap file)
+  pages/                komponen halaman: Daftar, Kegiatan, KegiatanDetail, Webinar, Anggota, Kontak, Privasi, NotFound
+  entry-server.tsx      entri prerender: render(kunciHalaman)
   App.tsx               urutan halaman: Navbar, section + jeda (Break), rel section, Footer
   styles/tokens.css     design token (warna Terang/Gelap, font, tinggi navbar)
   styles/global.css     base style, utility cutting-mat, reduced motion
-  i18n/                 kamus id.ts / en.ts, tipe di types.ts, hook useI18n
-  hooks/                useTheme, useActiveSection, useHeaderMetrics, useLazyData, usePointerFx
-  components/           Navbar, Banner, Footer, Section, Break, SectionRail, PointField, ...
+  i18n/                 kamus id.ts / en.ts, teks halaman tambahan pages-id.ts / pages-en.ts, tipe di types.ts, hook useI18n
+  hooks/                useTheme, useActiveSection, useHeaderMetrics, useLazyData
+  components/           Navbar, Banner, Footer, Section, Break, SectionRail, PointField, PageShell, form/ (formulir), ...
   sections/             satu file per section; urutan di sections/index.ts
   data/                 members.json, webinars.json (dimuat lazy) + loader di index.ts
   config/pointfield.ts  semua parameter animasi titik 3D (satu sumber)
   pointfield/           engine latar titik 3D (three.js, dimuat terpisah)
   dev/                  panel tuning (?tune, hanya dev server)
-  lib/                  kelas UI bersama (ui.ts), pencarian, slide, storage
+  lib/                  kelas UI bersama (ui.ts), rute (routes.ts), validasi + kirim formulir (forms.ts, submit.ts), pencarian, slide, storage
 ```
 
 ## Token desain
@@ -294,34 +304,21 @@ Kontrak DOM antara halaman dan engine:
 - Urutan scroll = urutan DOM `[data-section]` (0..7) dan `[data-break]` (0..6).
 - Engine men-set `--mat-offset` di `<main>` untuk parallax cutting mat.
 
-## Animasi mikro
+## Animasi
 
-Semua animasi menghormati `prefers-reduced-motion` (mati atau instan). Selain transisi warna saat
-ganti tema, semuanya hanya menganimasikan transform dan opacity, tanpa layout shift. Efek hover
-hanya aktif di `(hover: hover) and (pointer: fine)`, dan tiap efek punya padanan
-`:focus-visible`.
+UI sengaja minim animasi. Satu-satunya yang bergerak adalah point field three.js (`src/pointfield`)
+dan scroll (scroll-snap, peredam roda, realign anchor). Selebihnya:
 
-| Animasi | Di mana |
+| Perilaku | Di mana |
 |---|---|
-| Reveal saat scroll: fade + naik 16px, stagger 45ms | `src/hooks/useReveal.ts` + atribut `data-reveal`; CSS di `global.css` |
-| Bayangan navbar setelah scroll; garis indikator menu aktif yang bergeser (≥ 768px) | `src/components/Navbar.tsx` |
-| Bilah progres scroll 2px (accent) di tepi bawah navbar (`scaleX`) | `src/components/Navbar.tsx` |
-| Rel titik navigasi di tepi kanan (≥ 1280px): titik aktif, tooltip nama section saat hover/fokus, bisa diklik dan diakses keyboard | `src/components/SectionRail.tsx` |
-| Tombol naik 2px saat hover/fokus (150ms). Kartu hanya naik bila berisi tautan/tombol (kartu webinar dengan "Tonton"/"Slide"); kartu lain statis | `buttonBase`, `cardLift` di `src/lib/ui.ts` |
-| Tombol utama/CTA: magnetik (geser maks. 6px ke arah kursor) dan riak dari titik klik (keyboard: dari tengah) | kelas `fx-magnetic`, `fx-ripple` di `buttonPrimary`; `src/hooks/usePointerFx.ts` + `global.css` |
-| Sorotan radial mengikuti kursor (`--mx`/`--my`) pada kartu interaktif saja; muncul juga saat fokus keyboard di dalam kartu | kelas `fx-spotlight` di `cardLift`; `usePointerFx.ts` + `global.css` |
-| Tombol tema: ikon matahari/bulan berputar + crossfade 200ms. Toggle bahasa: thumb aktif meluncur (`transform`). Keduanya umpan balik tekan `scale(0.97)` | `src/components/ThemeToggle.tsx`, `src/components/SegmentedToggle.tsx` |
-| Transisi warna 200ms saat ganti tema | `src/hooks/useTheme.ts` + `.theme-transition` |
-| Crossfade 200ms saat ganti bahasa (View Transitions API) | `src/components/LangToggle.tsx` |
-| Angka statistik menghitung naik (1,2 detik) | `src/components/CountUp.tsx` (di Tentang) |
+| Hover/fokus hanya mengganti warna/latar/garis, `transition` 120ms `ease-out` | `buttonBase` di `src/lib/ui.ts`, toggle, rel titik |
+| Ganti tema dan bahasa seketika (tanpa transisi, tanpa View Transitions) | `src/hooks/useTheme.ts`, `src/components/LangToggle.tsx` |
+| Reveal saat scroll, CountUp, ripple/magnetik/spotlight, tombol/kartu naik saat hover: **tidak ada** | (dihapus) |
+| Indikator menu aktif dan thumb toggle bahasa berpindah seketika; bilah progres scroll (`scaleX`) mengikuti posisi gulir | `Navbar.tsx`, `SegmentedToggle.tsx`, `useScrollState.ts` |
+| Fokus keyboard: outline 3px aksen | `:focus-visible` di `global.css` |
 
-Handler pointer (`usePointerFx`, bilah progres) memakai listener pasif dan diterapkan sekali per
-`requestAnimationFrame`.
-
-Reveal aman tanpa JS: elemen hanya disembunyikan bila hook memasang `data-reveal-pending`. Elemen
-yang sudah terlihat saat halaman dibuka tidak dianimasikan. Untuk menambah reveal pada blok baru,
-beri atribut `data-reveal`, tetapi jangan pada elemen yang berada di dalam blok lain yang juga
-punya `data-reveal`.
+`prefers-reduced-motion: reduce` tetap mematikan animasi/transisi sisa (aturan di `@layer base`).
+Jangan menambah `data-reveal`, keyframes, atau `transform` transition baru.
 
 ## Data anggota dan webinar
 

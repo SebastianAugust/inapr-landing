@@ -1,4 +1,5 @@
 import type { Dictionary } from './types'
+import { pagesId } from './pages-id'
 
 const LOREM_SHORT = 'Lorem ipsum dolor sit amet consectetur.'
 const LOREM_LONG =
@@ -238,4 +239,5 @@ export const id: Dictionary = {
     email: 'email@lorem.ipsum',
     fine: 'Draf layout, isi sebagian masih placeholder.',
   },
+  ...pagesId,
 }

@@ -1,7 +1,7 @@
-import { PendingLink } from '@/components/PendingLink'
 import { Placeholder } from '@/components/Placeholder'
 import { Section, SectionHead } from '@/components/Section'
 import { useI18n } from '@/i18n/useI18n'
+import { ROUTE } from '@/lib/routes'
 import { buttonPrimary, card, cx, meta, subheading } from '@/lib/ui'
 
 /** #gabung: cara bergabung + manfaat. Seluruhnya placeholder. */
@@ -17,7 +17,7 @@ export function Gabung() {
           <p className={subheading}>{c.sub}</p>
           <ol className="m-0 mt-6 grid list-none gap-4 p-0">
             {c.steps.map((step, i) => (
-              <li key={step.title} data-reveal className="grid grid-cols-[2.4rem_minmax(0,1fr)] gap-3.5">
+              <li key={step.title} className="grid grid-cols-[2.4rem_minmax(0,1fr)] gap-3.5">
                 <span
                   aria-hidden="true"
                   className="grid size-10 place-items-center rounded-full bg-accent font-heading font-medium text-accent-ink"
@@ -32,11 +32,13 @@ export function Gabung() {
             ))}
           </ol>
           <div className="mt-7">
-            <PendingLink label={c.cta} className={buttonPrimary} />
+            <a href={ROUTE.daftar} className={buttonPrimary}>
+              {c.cta}
+            </a>
           </div>
         </div>
 
-        <div data-reveal className={cx(card, 'grid content-start gap-3 self-start p-6')}>
+        <div className={cx(card, 'grid content-start gap-3 self-start p-6')}>
           <h3 className="flex flex-wrap items-center gap-2 text-[1.1rem] font-medium">
             {c.benefitsTitle} <Placeholder />
           </h3>

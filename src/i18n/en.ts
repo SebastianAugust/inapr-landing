@@ -1,4 +1,5 @@
 import type { Dictionary } from './types'
+import { pagesEn } from './pages-en'
 
 const LOREM_SHORT = 'Lorem ipsum dolor sit amet consectetur.'
 const LOREM_LONG =
@@ -234,4 +235,5 @@ export const en: Dictionary = {
     email: 'email@lorem.ipsum',
     fine: 'Layout draft, some content is still placeholder.',
   },
+  ...pagesEn,
 }

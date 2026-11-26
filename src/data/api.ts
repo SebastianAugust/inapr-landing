@@ -1,5 +1,5 @@
 /**
- * Sumber data anggota & arsip webinar. Kontrak lengkap: docs/KONTRAK-DATA.md.
+ * Sumber data anggota, arsip webinar, dan kegiatan. Kontrak lengkap: docs/KONTRAK-DATA.md (kegiatan = USULAN).
  *
  * Urutan pemilihan sumber (dibaca saat build, lihat .env.example):
  *   a. VITE_API_BASE terisi                            → GET {base}/api/public/members | archives  ({ items: [...] })
@@ -12,9 +12,13 @@
  * Aturan: hanya membaca (GET), hanya anon key, tidak pernah melempar error. Bila sumber jauh
  * gagal / timeout / respons tidak valid / kosong, jatuh ke data lokal.
  */
+import { buildLocalActivities, sortActivities } from './activities-local'
 import {
   loadMembers,
   loadWebinars,
+  type Activity,
+  type ActivitiesData,
+  type ActivityKind,
   type Member,
   type MembersData,
   type Webinar,
@@ -24,6 +28,7 @@ import {
 const TIMEOUT_MS = 4000
 const MAX_MEMBERS = 2000
 const MAX_ARCHIVES = 500
+const MAX_ACTIVITIES = 1000
 /** Batas ukuran badan respons (hanya bila server mengirim Content-Length). */
 const MAX_BODY_BYTES = 2_000_000
 
@@ -90,17 +95,19 @@ function warn(message: string, error?: unknown) {
   if (import.meta.env.DEV) console.warn(`[data] ${message}, memakai data lokal.`, error ?? '')
 }
 
-/** GET → array mentah (belum divalidasi per item), atau null bila gagal. Tidak pernah melempar. */
-async function fetchItems(resource: 'members' | 'archives', source: Source): Promise<unknown[] | null> {
+/** GET → badan JSON mentah (belum divalidasi), atau null bila gagal. Tidak pernah melempar. */
+async function fetchBody(source: Source, path: string, supabasePath: string | null): Promise<unknown> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
     const headers: Record<string, string> = { Accept: 'application/json' }
     let url: string
     if (source.kind === 'api') {
-      url = `${source.base}/api/public/${resource}`
+      url = `${source.base}/api/public/${path}`
     } else {
-      url = `${source.origin}${resource === 'members' ? SUPABASE_MEMBERS : SUPABASE_ARCHIVES}`
+      // Supabase hanya untuk anggota + arsip; kegiatan (kontrak usulan) hanya lewat API.
+      if (supabasePath === null) return null
+      url = `${source.origin}${supabasePath}`
       headers.apikey = source.anonKey
       headers.Authorization = `Bearer ${source.anonKey}`
     }
@@ -115,17 +122,27 @@ async function fetchItems(resource: 'members' | 'archives', source: Source): Pro
     if (length > MAX_BODY_BYTES) throw new Error('respons terlalu besar')
 
     // Pembacaan badan tetap berada di bawah timeout yang sama.
-    const body: unknown = await response.json()
-    // api: { items: [...] }; supabase: array polos.
-    const items = source.kind === 'api' ? (isRecord(body) ? body.items : undefined) : body
-    if (!Array.isArray(items)) throw new Error('bentuk respons tidak dikenali')
-    return items
+    return (await response.json()) as unknown
   } catch (error) {
-    warn(`Sumber ${source.kind} (${resource}) gagal`, error)
+    warn(`Sumber ${source.kind} (${path}) gagal`, error)
     return null
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** GET daftar → array mentah (belum divalidasi per item), atau null bila gagal. Tidak pernah melempar. */
+async function fetchItems(resource: 'members' | 'archives' | 'activities', source: Source): Promise<unknown[] | null> {
+  const supabasePath =
+    resource === 'members' ? SUPABASE_MEMBERS : resource === 'archives' ? SUPABASE_ARCHIVES : null
+  const body = await fetchBody(source, resource, supabasePath)
+  // api: { items: [...] }; supabase: array polos.
+  const items = source.kind === 'api' ? (isRecord(body) ? body.items : undefined) : body
+  if (!Array.isArray(items)) {
+    if (body !== null) warn(`Bentuk respons ${resource} tidak dikenali`)
+    return null
+  }
+  return items
 }
 
 // ---------- Type guard & pembersih field ----------
@@ -192,6 +209,43 @@ function toWebinar(raw: unknown): Webinar | null {
   }
 }
 
+const ACTIVITY_ID = /^[A-Za-z0-9_-]{1,100}$/
+
+/** "Conference"/"konferensi" → conference; "webinar" → webinar; selain itu kegiatan. */
+function activityKind(value: unknown): ActivityKind {
+  const raw = text(value, 40).toLowerCase()
+  if (raw.startsWith('conf') || raw.startsWith('konf')) return 'conference'
+  if (raw.startsWith('webinar')) return 'webinar'
+  return 'kegiatan'
+}
+
+/**
+ * { id, jenis, tanggal, tanggal_selesai?, waktu, tema, penyaji, institusi, lokasi, deskripsi, youtube_url, materi_url,
+ *   pendaftaran_dibuka } → Activity. Kontrak USULAN (docs/KONTRAK-DATA.md). id tidak aman untuk URL atau tema kosong → dibuang.
+ */
+function toActivity(raw: unknown): Activity | null {
+  if (!isRecord(raw)) return null
+  const idValue = typeof raw.id === 'number' ? String(raw.id) : text(raw.id, 100)
+  const title = text(raw.tema, 300)
+  if (!ACTIVITY_ID.test(idValue) || !title) return null
+  return {
+    id: idValue,
+    kind: activityKind(raw.jenis),
+    date: isoDate(raw.tanggal),
+    dateEnd: isoDate(raw.tanggal_selesai),
+    time: timeLabel(raw.waktu),
+    title,
+    speaker: text(raw.penyaji, 200),
+    institution: text(raw.institusi, 200),
+    location: text(raw.lokasi, 300),
+    description: typeof raw.deskripsi === 'string' ? raw.deskripsi.replace(/\r\n?/g, '\n').trim().slice(0, 5000) : '',
+    youtube: httpUrl(raw.youtube_url),
+    materials: httpUrl(raw.materi_url),
+    // Hanya true yang eksplisit; apa pun selain itu dianggap tertutup.
+    registrationOpen: raw.pendaftaran_dibuka === true || raw.pendaftaran_dibuka === 1,
+  }
+}
+
 function mapAll<T>(items: unknown[], max: number, map: (raw: unknown) => T | null): T[] {
   const result: T[] = []
   for (const raw of items.slice(0, max)) {
@@ -247,3 +301,38 @@ export const getArchives = once<WebinarsData>(async () => {
   }
   return loadWebinars()
 })
+
+/** Awalan untuk POST same-origin: sama dengan sumber GET (kosong = path absolut "/api/public/…" di situs yang sama). */
+export function apiPostBase(): string {
+  return SOURCE?.kind === 'api' ? SOURCE.base : ''
+}
+
+/**
+ * Daftar kegiatan (konferensi, webinar, kegiatan). Kontrak USULAN: GET /api/public/activities. Sumber jauh bila ada
+ * (hanya mode API); kalau tidak ada/gagal/kosong: kegiatan di kamus + arsip webinar (getArchives).
+ */
+export const getActivities = once<ActivitiesData>(async () => {
+  if (SOURCE?.kind === 'api') {
+    const raw = await fetchItems('activities', SOURCE)
+    const items = raw ? mapAll(raw, MAX_ACTIVITIES, toActivity) : []
+    if (items.length) return { source: SOURCE.kind, items: sortActivities(items) }
+    if (raw) warn('Sumber kegiatan kosong/tidak valid')
+  }
+  const archives = await getArchives()
+  return { source: archives.source === 'api' ? 'local+api' : 'local', items: buildLocalActivities(archives.items) }
+})
+
+/**
+ * Satu kegiatan menurut id. Kontrak USULAN: GET /api/public/activities/{id} -> { item: {...} }. Bila endpoint
+ * tidak ada/gagal, dicari di daftar (getActivities). null = tidak ditemukan.
+ */
+export async function getActivity(id: string): Promise<Activity | null> {
+  if (!ACTIVITY_ID.test(id)) return null
+  if (SOURCE?.kind === 'api') {
+    const body = await fetchBody(SOURCE, `activities/${encodeURIComponent(id)}`, null)
+    const item = isRecord(body) ? toActivity(body.item) : null
+    if (item && item.id === id) return item
+  }
+  const list = await getActivities()
+  return list.items.find((activity) => activity.id === id) ?? null
+}

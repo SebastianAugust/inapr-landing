@@ -1,7 +1,9 @@
+import { resolve } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv } from 'vite'
+import { PAGES } from './config/pages.ts'
 import { seo } from './config/seo-plugin.ts'
 
 /**
@@ -18,6 +20,8 @@ export default defineConfig(({ mode, isSsrBuild }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
 
   return {
+    // Multi-page statis (config/pages.json): tanpa fallback SPA; rute situs dipetakan oleh config/pages.ts (dev/preview) dan hosting.
+    appType: 'mpa',
     base: parseBase(env.VITE_BASE),
     // Sama untuk build klien dan SSR (prerender) dalam satu `npm run build`; dipakai Footer supaya hidrasi cocok.
     define: { __BUILD_YEAR__: JSON.stringify(new Date().getFullYear()) },
@@ -36,6 +40,10 @@ export default defineConfig(({ mode, isSsrBuild }) => {
       },
     },
     build: {
+      // Satu masukan HTML per halaman. Build SSR (prerender) memakai masukan sendiri dari CLI.
+      rollupOptions: isSsrBuild
+        ? undefined
+        : { input: Object.fromEntries(PAGES.map((page) => [page.key, resolve(process.cwd(), page.file)])) },
       // Build SSR hanya untuk prerender (scripts/prerender.mjs); public/ tidak perlu disalin.
       copyPublicDir: !isSsrBuild,
       // Chunk terbesar adalah three.js (±535 kB, ±134 kB gzip) untuk latar titik.

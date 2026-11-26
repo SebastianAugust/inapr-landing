@@ -10,7 +10,7 @@ export function Bidang() {
   return (
     <Section id="bidang">
       <SectionHead id="bidang" eyebrow={c.eyebrow} title={c.title} placeholder />
-      <ul data-reveal className="m-0 grid list-none gap-px overflow-hidden rounded-[10px] border border-line bg-line p-0 sm:grid-cols-2 lg:grid-cols-3">
+      <ul className="m-0 grid list-none gap-px overflow-hidden rounded-[10px] border border-line bg-line p-0 sm:grid-cols-2 lg:grid-cols-3">
         {c.items.map((item) => (
           <li key={item.name} className="grid content-start gap-2 bg-bg p-6">
             <h3 className="text-[1.1rem] font-medium">{item.name}</h3>

@@ -1,32 +1,25 @@
-import { useSyncExternalStore, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useI18n } from '@/i18n/useI18n'
-import type { NavId } from '@/lib/sections'
+import { usePage } from '@/lib/page'
+import { ROUTE, sectionHref } from '@/lib/routes'
+import { useCurrentYear } from '@/lib/year'
 import { Container } from './Container'
 import { Placeholder } from './Placeholder'
 
-const EXPLORE: NavId[] = ['kegiatan', 'publikasi', 'anggota', 'berita']
-const ORGANIZATION: NavId[] = ['tentang', 'gabung']
-
 const linkClass = 'text-bg/85 no-underline hover:text-bg hover:underline'
-/**
- * Tahun hak cipta. Saat hidrasi (dan prerender) dipakai tahun BUILD (__BUILD_YEAR__, vite.config.ts), sama
- * dengan HTML prerender, jadi tidak ada mismatch; setelah itu React menyamakan ke tahun sekarang.
- * Tanpa hidrasi (createRoot) langsung tahun sekarang, seperti sebelumnya.
- */
-const subscribeNever = () => () => {}
-const currentYear = () => new Date().getFullYear()
-const buildYear = () => __BUILD_YEAR__
 
 export function Footer() {
   const { t } = useI18n()
-  const year = useSyncExternalStore(subscribeNever, currentYear, buildYear)
+  const page = usePage()
+  const year = useCurrentYear()
+  const section = (id: string) => sectionHref(page, id)
 
   return (
     <footer className="relative z-10 bg-ink pt-14 pb-8 text-bg [&_:focus-visible]:outline-titik-3">
       <Container className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1.3fr]">
         <div>
           <a
-            href="#tentang"
+            href={page === 'home' ? '#tentang' : ROUTE.home}
             aria-label={t.nav.home}
             className="inline-flex items-center gap-2.5 rounded font-heading text-[1.05rem] font-extrabold tracking-[0.04em] text-bg no-underline"
           >
@@ -37,28 +30,18 @@ export function Footer() {
         </div>
 
         <FooterColumn title={t.footer.explore}>
-          {EXPLORE.map((id) => (
-            <li key={id}>
-              <a href={`#${id}`} className={linkClass}>
-                {t.nav.items[id]}
-              </a>
-            </li>
-          ))}
+          <FooterLink href={ROUTE.kegiatan}>{t.nav.items.kegiatan}</FooterLink>
+          <FooterLink href={ROUTE.webinar}>{t.navPages.webinar}</FooterLink>
+          <FooterLink href={ROUTE.anggota}>{t.nav.items.anggota}</FooterLink>
+          <FooterLink href={section('publikasi')}>{t.nav.items.publikasi}</FooterLink>
+          <FooterLink href={section('berita')}>{t.nav.items.berita}</FooterLink>
         </FooterColumn>
 
         <FooterColumn title={t.footer.organization}>
-          {ORGANIZATION.map((id) => (
-            <li key={id}>
-              <a href={`#${id}`} className={linkClass}>
-                {t.nav.items[id]}
-              </a>
-            </li>
-          ))}
-          <li>
-            <a href="#afiliasi" className={linkClass}>
-              {t.footer.affiliation}
-            </a>
-          </li>
+          <FooterLink href={section('tentang')}>{t.nav.items.tentang}</FooterLink>
+          <FooterLink href={section('gabung')}>{t.nav.items.gabung}</FooterLink>
+          <FooterLink href={ROUTE.daftar}>{t.footerPages.registerLink}</FooterLink>
+          <FooterLink href={section('afiliasi')}>{t.footer.affiliation}</FooterLink>
         </FooterColumn>
 
         <FooterColumn title={t.footer.contact}>
@@ -76,13 +59,29 @@ export function Footer() {
             {t.footer.email}
             <Placeholder className="border-bg/60 text-bg/85" />
           </li>
+          <FooterLink href={ROUTE.kontak}>{t.footerPages.contactPage}</FooterLink>
         </FooterColumn>
 
-        <p className="col-span-full border-t border-bg/25 pt-5 text-[0.9rem] text-bg/75">
-          © {year} INAPR · {t.footer.fine}
+        <p className="col-span-full flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-bg/25 pt-5 text-[0.9rem] text-bg/75">
+          <span>
+            © {year} INAPR · {t.footer.fine}
+          </span>
+          <a href={ROUTE.privasi} className={linkClass}>
+            {t.footerPages.privacy}
+          </a>
         </p>
       </Container>
     </footer>
+  )
+}
+
+function FooterLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <li>
+      <a href={href} className={linkClass}>
+        {children}
+      </a>
+    </li>
   )
 }
 

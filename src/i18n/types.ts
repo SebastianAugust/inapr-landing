@@ -1,3 +1,5 @@
+import type { PageKey } from '@/lib/routes'
+
 export type Lang = 'id' | 'en'
 
 export type SectionId =
@@ -42,7 +44,7 @@ export interface EventItem {
   meta?: string
 }
 
-export interface Dictionary {
+export interface Dictionary extends PagesCopy {
   /** Judul dokumen dan meta description; diganti saat bahasa berganti. */
   meta: { title: string; description: string }
   banner: string
@@ -160,4 +162,120 @@ export interface Dictionary {
     email: string
     fine: string
   }
+}
+
+// ---------- Halaman tambahan (multi-page): src/i18n/pages-id.ts dan pages-en.ts ----------
+
+export interface PageMeta {
+  title: string
+  description: string
+}
+
+export interface FieldCopy {
+  label: string
+  hint?: string
+  placeholder?: string
+}
+
+/** Teks bersama semua formulir (validasi, status kirim, galat server). */
+export interface FormCopy {
+  requiredLegend: string
+  optional: string
+  errorSummary: (count: number) => string
+  required: (label: string) => string
+  tooShort: (label: string, min: number) => string
+  tooLong: (label: string, max: number) => string
+  invalidEmail: string
+  invalidUrl: (label: string) => string
+  consentRequired: string
+  sending: string
+  jsRequired: string
+  /** API tidak ada / tidak terjangkau / timeout / respons tidak valid: data TIDAK terkirim. */
+  unavailable: { title: string; body: string; cta: string }
+  serverError: { title: string; body: string }
+  rejected: (message: string) => string
+  conflict: string
+  rateLimited: string
+  /** Kebijakan privasi dalam kalimat: "{before}<tautan>{after}". */
+  consent: { before: string; link: string; after: string }
+}
+
+export interface SuccessCopy {
+  title: string
+  body: string
+}
+
+export type ActivityKindKey = 'conference' | 'webinar' | 'kegiatan'
+
+export interface PagesCopy {
+  /** Judul + deskripsi tiap halaman selain home (home memakai `meta`). */
+  pageMeta: Record<Exclude<PageKey, 'home'>, PageMeta>
+  navPages: { webinar: string; kontak: string; privasi: string }
+  /** Tautan "lihat semua" dari home ke halaman penuh. */
+  links: { kegiatanAll: string; webinarAll: string; anggotaAll: string }
+  form: FormCopy
+  daftar: {
+    eyebrow: string
+    title: Title
+    sub: string
+    fields: { nama: FieldCopy; email: FieldCopy; institusi: FieldCopy; tahun: FieldCopy; bukti: FieldCopy }
+    submit: string
+    success: SuccessCopy
+    infoTitle: string
+    infoBody: string
+    fee: string
+  }
+  kegiatanPage: {
+    eyebrow: string
+    title: Title
+    sub: string
+    searchLabel: string
+    searchPlaceholder: string
+    filterLabel: string
+    filters: Record<'all' | ActivityKindKey, string>
+    kinds: Record<ActivityKindKey, string>
+    showing: (from: number, to: number, total: number) => string
+    empty: string
+    paginationLabel: string
+    detail: string
+    registrationOpen: string
+    undated: string
+  }
+  kegiatanDetail: {
+    back: string
+    kicker: string
+    notFound: { title: string; body: string; cta: string }
+    labels: { date: string; time: string; speaker: string; institution: string; location: string; kind: string }
+    noDescription: string
+    watch: string
+    slides: string
+    registration: {
+      title: string
+      fields: { nama: FieldCopy; email: FieldCopy; institusi: FieldCopy }
+      submit: string
+      success: SuccessCopy
+    }
+  }
+  webinarPage: { eyebrow: string; title: Title; sub: string }
+  anggotaPage: { eyebrow: string; title: Title; sub: string; institution: string }
+  kontak: {
+    eyebrow: string
+    title: Title
+    sub: string
+    addressTitle: string
+    emailLabel: string
+    phoneLabel: string
+    pending: string
+    noForm: string
+    registerNote: { before: string; link: string; after: string }
+  }
+  privasi: {
+    eyebrow: string
+    title: Title
+    draftNotice: string
+    updated: string
+    sections: { title: string; body: string[]; list?: string[]; placeholder?: boolean }[]
+  }
+  notFound: { eyebrow: string; title: string; body: string; home: string; kegiatan: string }
+  footerPages: { privacy: string; contactPage: string; registerLink: string }
 }

@@ -6,19 +6,16 @@ import { Navbar } from '@/components/Navbar'
 import { PointField } from '@/components/PointField'
 import { SectionRail } from '@/components/SectionRail'
 import { useAnchorRealign } from '@/hooks/useAnchorRealign'
-import { usePointerFx } from '@/hooks/usePointerFx'
-import { useReveal } from '@/hooks/useReveal'
 import { useI18n } from '@/i18n/useI18n'
+import { PageProvider } from '@/components/PageProvider'
 import { SECTIONS } from '@/sections'
 
 export default function App() {
   const { t } = useI18n()
-  useReveal()
   useAnchorRealign()
-  usePointerFx()
 
   return (
-    <>
+    <PageProvider page="home">
       <a
         href="#main"
         className="sr-only rounded-md bg-accent px-4 py-2 font-heading text-accent-ink focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100]"
@@ -47,6 +44,6 @@ export default function App() {
       {/* Setelah konten: urutan Tab tetap navbar → konten → rel → footer. */}
       <SectionRail />
       <Footer />
-    </>
+    </PageProvider>
   )
 }

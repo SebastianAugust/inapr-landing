@@ -54,7 +54,7 @@ interface SectionHeadProps {
 /** Eyebrow + judul h2 (+ aksi opsional di kanan). */
 export function SectionHead({ id, eyebrow, title, placeholder, action, className }: SectionHeadProps) {
   return (
-    <div data-reveal className={cx('flex flex-wrap items-end justify-between gap-4', className ?? 'mb-8')}>
+    <div className={cx('flex flex-wrap items-end justify-between gap-4', className ?? 'mb-8')}>
       <div>
         <p className="flex flex-wrap items-center gap-2">
           <span className={eyebrowClass}>{eyebrow}</span>

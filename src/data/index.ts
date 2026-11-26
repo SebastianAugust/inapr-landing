@@ -40,6 +40,40 @@ export interface WebinarsData {
   items: Webinar[]
 }
 
+export type ActivityKind = 'conference' | 'webinar' | 'kegiatan'
+
+/**
+ * Satu kegiatan (daftar /kegiatan dan detail /kegiatan/{id}). Sumber: GET /api/public/activities (USULAN,
+ * docs/KONTRAK-DATA.md) atau data lokal (kegiatan di kamus + webinars.json). String kosong = tidak ada.
+ */
+export interface Activity {
+  /** Aman untuk URL: huruf, angka, "-", "_" (maks. 100). Lokal: slug stabil dari tanggal + judul. */
+  id: string
+  kind: ActivityKind
+  /** ISO "2022-09-02", atau "" bila tanggal belum tercatat. */
+  date: string
+  /** ISO akhir untuk kegiatan beberapa hari, atau "". */
+  dateEnd: string
+  time: string
+  title: string
+  speaker: string
+  institution: string
+  location: string
+  description: string
+  youtube: string
+  materials: string
+  /** Hanya true bila server menyatakan pendaftaran peserta dibuka. Data lokal/arsip selalu false. */
+  registrationOpen: boolean
+  /** Hanya data lokal: acuan ke teks kamus supaya judul/keterangan mengikuti bahasa aktif. */
+  localRef?: 'featured' | number
+}
+
+export interface ActivitiesData {
+  source: string
+  /** Terbaru dulu; yang tanpa tanggal di akhir. */
+  items: Activity[]
+}
+
 /**
  * Data LOKAL, di-import dinamis (chunk terpisah) supaya tidak masuk bundel awal.
  * Komponen memakai getMembers()/getArchives() dari ./api, yang jatuh ke sini bila sumber jauh tidak tersedia.

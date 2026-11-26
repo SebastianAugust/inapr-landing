@@ -15,8 +15,7 @@ export function PendingLink({ label, className }: PendingLinkProps) {
   return (
     <span
       title={t.common.linkPending}
-      // Belum bisa diklik → tidak ikut efek naik saat hover.
-      className={cx(className, 'cursor-not-allowed border-dashed opacity-80 hover:translate-y-0!')}
+      className={cx(className, 'cursor-not-allowed border-dashed opacity-80')}
     >
       {label}
       <span className="sr-only"> ({t.common.linkPending})</span>

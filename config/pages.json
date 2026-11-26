@@ -1,0 +1,11 @@
+[
+  { "key": "home", "file": "index.html", "route": "/", "indexable": true },
+  { "key": "daftar", "file": "daftar.html", "route": "/daftar", "indexable": false },
+  { "key": "kegiatan", "file": "kegiatan.html", "route": "/kegiatan", "indexable": true },
+  { "key": "kegiatan-detail", "file": "kegiatan-detail.html", "route": "/kegiatan/:id", "indexable": false, "canonical": false },
+  { "key": "webinar", "file": "webinar.html", "route": "/webinar", "indexable": true },
+  { "key": "anggota", "file": "anggota.html", "route": "/anggota", "indexable": true },
+  { "key": "kontak", "file": "kontak.html", "route": "/kontak", "indexable": true },
+  { "key": "privasi", "file": "privasi.html", "route": "/privasi", "indexable": true },
+  { "key": "notfound", "file": "404.html", "route": null, "indexable": false, "canonical": false }
+]

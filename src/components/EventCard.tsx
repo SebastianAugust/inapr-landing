@@ -31,7 +31,7 @@ interface EventCardProps {
 /** Kartu kegiatan: kotak tanggal (bila ada), tag, judul, keterangan. */
 export function EventCard({ event, className, children }: EventCardProps) {
   return (
-    <article data-reveal className={cx(card, 'grid gap-4', event.date && 'grid-cols-[auto_minmax(0,1fr)]', className)}>
+    <article className={cx(card, 'grid gap-4', event.date && 'grid-cols-[auto_minmax(0,1fr)]', className)}>
       {event.date && <DateBox date={event.date} />}
       <div className="min-w-0">
         <Tag>{event.tag}</Tag>

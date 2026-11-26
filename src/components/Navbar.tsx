@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type FocusEvent } from 'react
 import { useActiveSection, useScrollProgress, useScrolled } from '@/hooks/useScrollState'
 import { useHeaderMetrics } from '@/hooks/useHeaderMetrics'
 import { useI18n } from '@/i18n/useI18n'
+import { usePage } from '@/lib/page'
+import { ROUTE, siteHref, type PageKey } from '@/lib/routes'
 import { NAV_IDS } from '@/lib/sections'
 import { buttonPrimary, buttonSmall, cx } from '@/lib/ui'
 import { Banner } from './Banner'
@@ -9,11 +11,28 @@ import { Container } from './Container'
 import { LangToggle } from './LangToggle'
 import { ThemeToggle } from './ThemeToggle'
 
+interface NavItem {
+  key: string
+  href: string
+  label: string
+}
+
+/** Halaman yang ditandai aktif di menu untuk tiap halaman (kegiatan-detail ikut "kegiatan"). */
+const ACTIVE_FOR_PAGE: Partial<Record<PageKey, string>> = {
+  kegiatan: 'kegiatan',
+  'kegiatan-detail': 'kegiatan',
+  webinar: 'webinar',
+  anggota: 'anggota',
+  kontak: 'kontak',
+}
+
 const PANEL_ID = 'site-menu'
 const DESKTOP_QUERY = '(min-width: 768px)'
 
 /**
  * Header sticky: banner draf (ikut tergulung) + bar navigasi.
+ * Home: menu = anchor section (#id). Halaman lain: menu = Tentang (/#tentang) + halaman penuh
+ * (Kegiatan, Webinar, Anggota, Kontak); halaman aktif ditandai aria-current="page".
  * < 768px: menu, toggle, dan CTA masuk panel burger.
  * 768–1279px: dua baris (logo/toggle/CTA, lalu menu).
  * ≥ 1280px: satu baris.
@@ -24,7 +43,19 @@ export function Navbar() {
   const headerRef = useRef<HTMLElement>(null)
   const bannerRef = useRef<HTMLParagraphElement>(null)
   const burgerRef = useRef<HTMLButtonElement>(null)
-  const active = useActiveSection()
+  const page = usePage()
+  const home = page === 'home'
+  const scrollActive = useActiveSection()
+  const active = home ? scrollActive : (ACTIVE_FOR_PAGE[page] ?? null)
+  const items: NavItem[] = home
+    ? NAV_IDS.map((id) => ({ key: id, href: `#${id}`, label: t.nav.items[id] }))
+    : [
+        { key: 'tentang', href: siteHref(ROUTE.home, 'tentang'), label: t.nav.items.tentang },
+        { key: 'kegiatan', href: ROUTE.kegiatan, label: t.nav.items.kegiatan },
+        { key: 'webinar', href: ROUTE.webinar, label: t.navPages.webinar },
+        { key: 'anggota', href: ROUTE.anggota, label: t.nav.items.anggota },
+        { key: 'kontak', href: ROUTE.kontak, label: t.navPages.kontak },
+      ]
 
   useHeaderMetrics(headerRef, bannerRef)
 
@@ -41,31 +72,21 @@ export function Navbar() {
   const progressRef = useRef<HTMLSpanElement>(null)
   useScrollProgress(progressRef)
 
-  // Indikator menu aktif (≥ 768px): satu garis yang bergeser (transform) ke item aktif.
+  // Indikator menu aktif (≥ 768px): satu garis yang berpindah seketika ke item aktif.
   const listRef = useRef<HTMLUListElement>(null)
   const barRef = useRef<HTMLLIElement>(null)
-  const barPlaced = useRef(false)
   useEffect(() => {
     const list = listRef.current
     const bar = barRef.current
     if (!list || !bar) return
     const place = () => {
-      const link = active ? list.querySelector<HTMLElement>(`a[href="#${active}"]`) : null
+      const link = active ? list.querySelector<HTMLElement>(`a[data-nav="${active}"]`) : null
       if (!link || link.offsetWidth === 0 || getComputedStyle(bar).display === 'none') {
         bar.style.opacity = '0'
-        barPlaced.current = false
         return
       }
-      // Penempatan pertama tanpa animasi (tidak meluncur dari kiri).
-      const instant = !barPlaced.current
-      if (instant) bar.style.transition = 'none'
       bar.style.transform = `translate(${link.offsetLeft}px, ${link.offsetTop + link.offsetHeight - 2}px) scaleX(${link.offsetWidth})`
       bar.style.opacity = '1'
-      if (instant) {
-        void bar.offsetWidth
-        bar.style.transition = ''
-        barPlaced.current = true
-      }
     }
     place()
     const observer = new ResizeObserver(place)
@@ -78,7 +99,7 @@ export function Navbar() {
       alive = false
       observer.disconnect()
     }
-  }, [active, t])
+  }, [active, t, home])
 
   // Saat panel terbuka: Esc menutup (fokus kembali ke burger), klik di luar menutup.
   useEffect(() => {
@@ -137,7 +158,7 @@ export function Navbar() {
         <span
           aria-hidden="true"
           className={cx(
-            'pointer-events-none absolute inset-x-0 top-full h-3 bg-linear-to-b from-ink/12 to-transparent transition-opacity duration-200 ease-out',
+            'pointer-events-none absolute inset-x-0 top-full h-3 bg-linear-to-b from-ink/12 to-transparent',
             scrolled ? 'opacity-100' : 'opacity-0',
           )}
         />
@@ -149,7 +170,7 @@ export function Navbar() {
         />
         <Container wide className="flex min-h-16 flex-wrap items-center gap-x-3 md:py-2 xl:py-0">
           <a
-            href="#tentang"
+            href={home ? '#tentang' : ROUTE.home}
             aria-label={t.nav.home}
             className="order-1 mr-auto flex min-h-11 items-center gap-2.5 rounded font-heading text-[1.05rem] font-extrabold tracking-[0.04em] text-ink no-underline md:mr-0"
           >
@@ -180,15 +201,16 @@ export function Navbar() {
               ref={listRef}
               className="m-0 flex list-none flex-col p-0 md:relative md:order-4 md:-mx-3 md:basis-full md:flex-row md:flex-wrap xl:order-2 xl:mx-auto xl:basis-auto"
             >
-              {NAV_IDS.map((id) => (
-                <li key={id}>
+              {items.map((item) => (
+                <li key={item.key}>
                   <a
-                    href={`#${id}`}
-                    aria-current={active === id ? 'location' : undefined}
+                    href={item.href}
+                    data-nav={item.key}
+                    aria-current={active === item.key ? (home ? 'location' : 'page') : undefined}
                     onClick={onLinkClick}
-                    className="flex min-h-11 items-center rounded-md px-3 py-3 font-heading text-base font-medium whitespace-nowrap text-muted no-underline hover:bg-soft hover:text-ink aria-[current=location]:text-ink max-md:aria-[current=location]:bg-soft max-md:aria-[current=location]:shadow-[inset_0_-2px_0_var(--accent)] md:py-2 md:text-[0.9rem] xl:px-2"
+                    className="flex min-h-11 items-center rounded-md px-3 py-3 font-heading text-base font-medium whitespace-nowrap text-muted no-underline hover:bg-soft hover:text-ink aria-[current]:text-ink max-md:aria-[current]:bg-soft max-md:aria-[current]:shadow-[inset_0_-2px_0_var(--accent)] md:py-2 md:text-[0.9rem] xl:px-2"
                   >
-                    {t.nav.items[id]}
+                    {item.label}
                   </a>
                 </li>
               ))}
@@ -196,7 +218,7 @@ export function Navbar() {
               <li
                 ref={barRef}
                 aria-hidden="true"
-                className="pointer-events-none absolute top-0 left-0 h-0.5 w-px origin-left bg-accent opacity-0 transition-[transform,opacity] duration-200 ease-out max-md:hidden"
+                className="pointer-events-none absolute top-0 left-0 h-0.5 w-px origin-left bg-accent opacity-0 max-md:hidden"
               />
             </ul>
 
@@ -206,7 +228,7 @@ export function Navbar() {
             </div>
 
             <a
-              href="#gabung"
+              href={ROUTE.daftar}
               onClick={onLinkClick}
               className={cx(buttonPrimary, buttonSmall, 'w-full md:order-3 md:w-auto xl:order-4')}
             >

@@ -2,6 +2,7 @@ import { EventCard } from '@/components/EventCard'
 import { Section, SectionHead } from '@/components/Section'
 import { WebinarList } from '@/components/WebinarList'
 import { useI18n } from '@/i18n/useI18n'
+import { ROUTE } from '@/lib/routes'
 
 /** #kegiatan: kegiatan 2018–2020 + webinar 2021–2022 dari situs lama (fakta asli). */
 export function Kegiatan() {
@@ -11,8 +12,18 @@ export function Kegiatan() {
 
   return (
     <Section id="kegiatan">
-      <SectionHead id="kegiatan" eyebrow={c.eyebrow} title={c.title} className="mb-3" />
-      <p data-reveal className="mb-8 text-[0.92rem] text-muted">{c.source}</p>
+      <SectionHead
+        id="kegiatan"
+        eyebrow={c.eyebrow}
+        title={c.title}
+        className="mb-3"
+        action={
+          <a href={ROUTE.kegiatan} className="text-accent underline">
+            {t.links.kegiatanAll}
+          </a>
+        }
+      />
+      <p className="mb-8 text-[0.92rem] text-muted">{c.source}</p>
 
       <EventCard event={featured} className="mb-5 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,0.9fr)]">
         <div className="col-span-full border-t border-line pt-4 md:col-span-1 md:border-t-0 md:border-l md:pt-0 md:pl-5">

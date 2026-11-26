@@ -19,7 +19,7 @@ export function Berita() {
       />
       <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
         {c.items.map((item, i) => (
-          <article key={i} data-reveal className={cx(card, 'grid content-start gap-3')}>
+          <article key={i} className={cx(card, 'grid content-start gap-3')}>
             <p className={meta}>{item.date}</p>
             <h3 className="text-[1.1rem] font-medium">{item.title}</h3>
             <p className={meta}>{item.body}</p>

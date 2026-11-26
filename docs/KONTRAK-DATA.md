@@ -1,7 +1,8 @@
 # Kontrak data landing ↔ backend
 
-Landing menampilkan dua daftar yang bisa berasal dari backend: **anggota** (#anggota) dan **arsip webinar** (#kegiatan).
-Kode: `src/data/api.ts` (`getMembers()`, `getArchives()`). Landing **hanya membaca** (GET) dan **hanya memakai anon key**.
+Landing menampilkan dua daftar yang bisa berasal dari backend: **anggota** (#anggota, /anggota) dan **arsip webinar** (#kegiatan, /webinar).
+Kode: `src/data/api.ts` (`getMembers()`, `getArchives()`). Untuk kedua daftar ini landing **hanya membaca** (GET) dan **hanya memakai anon key**.
+Kegiatan dan formulir pendaftaran (GET `activities`, POST `registrations`, POST `activities/{id}/register`) adalah kontrak **USULAN**: lihat bagian "Kegiatan dan pendaftaran".
 
 ## Pemilihan sumber
 
@@ -130,6 +131,136 @@ GET {VITE_SUPABASE_URL}/rest/v1/activity_archives
 Respons berupa array JSON polos. Keamanan bertumpu pada **RLS**: role `anon` hanya boleh `SELECT` pada kedua tabel itu
 (idealnya hanya baris & kolom di atas, mis. lewat view). Service-role key tidak boleh ada di landing.
 
+## Kegiatan dan pendaftaran (USULAN, backend belum ada)
+
+> **Status: USULAN.** Seluruh bagian ini adalah kontrak yang diusulkan landing; backend (MySQL di Hostinger, `/api/public/*`)
+> belum ada. Landing sudah menerapkannya dan **bekerja tanpa backend**: daftar kegiatan jatuh ke data lokal, dan formulir
+> menolak kirim dengan pesan jujur ("Pendaftaran online belum aktif"). Kode: `src/data/api.ts` (GET), `src/lib/submit.ts` (POST),
+> `src/components/form/RegistrationForm.tsx`. Bila kontrak berubah, ubah di sini dan di kode yang sama.
+
+Semua panggilan **same-origin** dengan path absolut `/api/public/…` (bukan di bawah base `/landing/`), sama seperti anggota/arsip.
+POST dikirim `Content-Type: application/json`, tanpa cookie lintas-situs, batas waktu **8 detik**.
+
+### `GET /api/public/activities`
+
+`200 application/json`, `{ "items": [ … ] }`. Maks. **1000** item diproses. Landing mengurutkan ulang (terbaru dulu; tanpa tanggal di akhir).
+
+```json
+{
+  "items": [
+    {
+      "id": "2026-12-05-konferensi-contoh",
+      "jenis": "Conference",
+      "tanggal": "2026-12-05",
+      "tanggal_selesai": "2026-12-06",
+      "waktu": "09:00:00",
+      "tema": "Judul Kegiatan Contoh",
+      "penyaji": "Dr. Contoh Satu",
+      "institusi": "Institut Teknologi Contoh",
+      "lokasi": "Bandung",
+      "deskripsi": "Teks biasa, boleh beberapa baris (\n).",
+      "youtube_url": null,
+      "materi_url": null,
+      "pendaftaran_dibuka": true
+    }
+  ]
+}
+```
+
+| Field | Tipe | Wajib | Batas / aturan |
+| --- | --- | --- | --- |
+| `id` | string \| number | ya | `[A-Za-z0-9_-]{1,100}` (dipakai di URL `/kegiatan/{id}`); tidak valid → item dibuang. Stabil: jangan berubah antar-panggilan |
+| `jenis` | string | tidak | `Conference` / `Webinar` / lainnya. Awalan `conf`/`konf` → Conference, `webinar` → Webinar, selain itu Kegiatan (tidak peka huruf besar) |
+| `tanggal` | string | tidak | `YYYY-MM-DD` (timestamp ISO dipotong); tidak valid/kosong → tampil "Tanggal belum tercatat" |
+| `tanggal_selesai` | string | tidak | `YYYY-MM-DD`, untuk kegiatan beberapa hari |
+| `waktu` | string \| null | tidak | `HH:MM:SS` → `HH.MM`; teks bebas dipakai apa adanya (maks. 40) |
+| `tema` | string | ya | maks. 300; kosong → item dibuang |
+| `penyaji`, `institusi` | string \| null | tidak | maks. 200 |
+| `lokasi` | string \| null | tidak | maks. 300 |
+| `deskripsi` | string \| null | tidak | teks biasa, maks. 5000; **bukan HTML** (dirender sebagai teks, baris baru → paragraf) |
+| `youtube_url`, `materi_url` | string \| null | tidak | **hanya `http(s)`** penuh, maks. 2000; selain itu dianggap kosong |
+| `pendaftaran_dibuka` | boolean | tidak | hanya `true` (atau `1`) yang membuka formulir peserta; selain itu tertutup |
+
+Larangan data sensitif sama seperti anggota: **jangan** kirim email/telepon peserta, daftar peserta, atau kolom internal.
+
+**Fallback lokal** bila sumber tidak ada/gagal/kosong: 8 kegiatan di `src/i18n` (konferensi pertama sebagai Conference, sisanya Kegiatan)
+digabung dengan `webinars.json`/arsip (Webinar). `id` lokal = slug stabil `{tanggal}-{judul}`; `pendaftaran_dibuka` selalu `false`.
+
+### `GET /api/public/activities/{id}`
+
+`200`, `{ "item": { …field yang sama seperti di atas… } }`. `404` + `{"ok":false,"error":"not_found"}` bila tidak ada. Bila endpoint
+ini gagal atau tidak ada, landing mencari `id` itu di daftar di atas; bila tetap tidak ada, menampilkan "Kegiatan tidak ditemukan".
+
+### `POST /api/public/registrations` (pendaftaran anggota)
+
+Request:
+
+```json
+{
+  "nama": "Contoh Satu, M.Kom.",
+  "email": "contoh@institusi.ac.id",
+  "institusi": "Institut Teknologi Contoh",
+  "tahun_daftar": 2026,
+  "bukti_bayar": "https://example.org/bukti/123"
+}
+```
+
+| Field | Tipe | Wajib | Aturan (landing memvalidasi; server **wajib** memvalidasi ulang) |
+| --- | --- | --- | --- |
+| `nama` | string | ya | 2–200 karakter setelah dirapikan (spasi ganda → satu, dipangkas) |
+| `email` | string | ya | format email, maks. 254 |
+| `institusi` | string | ya | 2–200 karakter |
+| `tahun_daftar` | integer | ya | tahun berjalan atau tahun berikutnya (landing hanya menawarkan dua nilai itu) |
+| `bukti_bayar` | string | tidak | **hanya tautan `http(s)`**, maks. 2000; tidak ada unggah berkas |
+
+Landing **tidak** mengirim persetujuan privasi (dicek di klien saja). Bila pengurus perlu bukti persetujuan, tambahkan field opsional
+`persetujuan_privasi: true` (usulan; landing perlu diubah untuk mengirimnya).
+
+### `POST /api/public/activities/{id}/register` (peserta kegiatan)
+
+Hanya dipanggil bila `pendaftaran_dibuka` = `true`.
+
+```json
+{ "nama": "Contoh Dua", "email": "dua@institusi.ac.id", "institusi": "Universitas Contoh" }
+```
+
+`nama` dan `email` seperti di atas; `institusi` opsional (2–200 bila ada, dihilangkan bila kosong).
+
+### Respons POST dan arti di landing
+
+Respons **harus selalu JSON**. Landing menganggap sukses **hanya** bila status 2xx **dan** badan `{ "ok": true }`.
+Selain itu tidak ada sukses palsu.
+
+| Status | Badan | Tampilan landing |
+| --- | --- | --- |
+| `200` / `201` | `{"ok":true}` | "Pendaftaran diterima, status menunggu verifikasi pengurus" (anggota) / "Pendaftaran peserta diterima" |
+| `400` / `422` | `{"ok":false,"error":"pesan singkat"}` | "Server menolak data: {error}" (maks. 200 karakter, tampil sebagai teks). Pakai juga untuk pendaftaran peserta yang **ditutup** |
+| `409` | `{"ok":false,"error":"…"}` | "Data ini sudah pernah didaftarkan" |
+| `429` | `{"ok":false,"error":"…"}` | "Terlalu banyak percobaan, tunggu sebentar" |
+| `500` | `{"ok":false,"error":"…"}` | "Pengiriman gagal, data belum tersimpan" |
+| `404`, `405`, `502`, `503`, `504`, jaringan putus, timeout 8 dtk, badan bukan JSON (mis. HTML), `2xx` tanpa `ok:true` | — | "Pendaftaran online belum aktif": data **tidak** terkirim, pengguna diarahkan ke `/kontak` |
+
+Jangan memakai `403`/`401` untuk penolakan yang ingin dijelaskan ke pengguna (landing menampilkannya sebagai "belum aktif"); pakai `400`.
+
+### Kewajiban sisi server (USULAN)
+
+Landing hanyalah antarmuka; **semua kontrol keamanan ada di backend**:
+
+1. **Validasi ulang semua input** di server: tipe (string/integer), panjang (tabel di atas), format email, skema URL (`http`/`https` saja),
+   rentang `tahun_daftar`, karakter kontrol. Tolak badan > ±10 KB dan `Content-Type` selain `application/json`. Jangan percaya validasi klien.
+2. **Batas panjang** kolom basis data sama dengan tabel di atas; potong/tolak, jangan simpan lebih panjang.
+3. **Query terparameter / prepared statement** untuk semua akses MySQL. Tanpa penggabungan string SQL, termasuk untuk `{id}` di URL.
+4. **Rate limit per IP** (dan per email) pada kedua endpoint POST → `429`. Tambahkan CAPTCHA/Turnstile bila ada penyalahgunaan.
+5. **Honeypot**: honeypot landing hanya di klien (kolom `alamat_web`; bila terisi formulir tidak mengirim apa pun), jadi server tidak melihatnya.
+   Server tetap butuh rate limit dan, bila perlu, honeypot/captcha miliknya sendiri.
+6. **Tidak mengembalikan data privat**: respons sukses hanya `{ "ok": true }` (tanpa id, tanpa gema data). Pesan galat singkat dan tidak membocorkan
+   detail internal (tanpa stack trace, tanpa nama tabel). Pertimbangkan `409` vs `200` generik untuk email yang sudah terdaftar (risiko enumerasi email).
+7. **CORS same-origin**: tidak mengirim header `Access-Control-Allow-Origin` untuk POST; periksa `Origin`/`Sec-Fetch-Site` agar hanya situs sendiri yang bisa
+   mengirim (mitigasi CSRF). Tanpa `Set-Cookie`.
+8. **Penyimpanan data pendaftaran**: status awal "menunggu verifikasi"; email dinormalisasi (huruf kecil, dipangkas); jangan mencatat badan permintaan
+   (berisi data pribadi) di log akses; tetapkan masa retensi dan hak hapus (lihat `/privasi`, masih draf).
+9. Semua respons (juga galat) berupa JSON dengan `Content-Type: application/json`.
+
 ## Pemetaan field
 
 **Anggota** → `Member`
@@ -137,7 +268,7 @@ Respons berupa array JSON polos. Keamanan bertumpu pada **RLS**: role `anon` han
 | Sumber | Landing | Catatan |
 | --- | --- | --- |
 | `nama` | `name` | wajib; kosong → item dibuang. Maks. 200 karakter |
-| `institusi` | `institution` | opsional; belum ditampilkan di UI |
+| `institusi` | `institution` | opsional; ditampilkan di /anggota dan #anggota (kolom hanya muncul bila ada) |
 
 Maks. 2000 item. Urutan dipakai apa adanya (Supabase: `nama.asc`). Pencarian & pagination tetap di sisi klien.
 
@@ -176,6 +307,7 @@ Catatan: sumber jauh yang menjawab sukses menggantikan seluruh data lokal. Angka
 
 ## Menyusul
 
-* **Kegiatan mendatang (`activities`)** dan **berita**: belum disambungkan. Kartu kegiatan (`kegiatan.featured`/`kegiatan.items`) dan berita (`berita.items`) masih konten statis di `src/i18n`;
-  endpoint `/api/public/activities` dan `/api/public/news` serta tabelnya akan ditambahkan di sini setelah kontraknya ditetapkan.
+* **Kegiatan** (`activities`) dan pendaftaran: kontrak USULAN ada di bagian "Kegiatan dan pendaftaran" di atas (halaman `/kegiatan`, `/kegiatan/{id}`, `/daftar`).
+  Kartu di section #kegiatan di home masih konten statis di `src/i18n`.
+* **Berita** (`/api/public/news`) dan **publikasi**: belum ada sumber data; halaman `/berita` dan `/publikasi` belum dibuat.
 * Foto/ikon anggota, filter institusi, dan `papers` sengaja belum ada di UI.

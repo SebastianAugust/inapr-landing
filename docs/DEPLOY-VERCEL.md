@@ -12,9 +12,9 @@ menyajikan folder `dist/`. Tidak ada server, database, atau rahasia.
 
 | File | Fungsi |
 |---|---|
-| `vercel.json` | Framework Vite, `npm run build`, output `dist`, header cache dan keamanan, header `noindex` selama draf. |
+| `vercel.json` | Framework Vite, `npm run build`, output `dist`, `cleanUrls` + rewrite `/kegiatan/:id`, header cache dan keamanan, header `noindex` selama draf. |
 | `.vercelignore` | Mencegah `node_modules`, `dist`, dan file `.env*` lokal ikut terunggah lewat CLI. |
-| `public/404.html` | Halaman 404 bertema. Vercel menampilkannya otomatis untuk alamat yang tidak ada. |
+| `404.html` (akar) | Halaman 404 (ter-prerender, tema/bahasa sama dengan situs). Vercel menampilkannya otomatis untuk alamat yang tidak ada. |
 | `config/seo-plugin.ts` | Saklar `DRAFT_NOINDEX`: `robots.txt` berisi `Disallow: /`, meta robots `noindex`, tanpa sitemap. |
 | `.env.example` | Daftar variabel env (`VITE_SITE_URL`, `VITE_SLIDES_BASE_URL`, `VITE_BASE`). |
 | `package.json` | `engines.node`: `^20.19.0 \|\| >=22.12.0` (syarat Vite 8). |
@@ -29,8 +29,11 @@ Header di `vercel.json`:
   lokasi, pembayaran, dan USB.
 - Semua rute, **sementara**: `X-Robots-Tag: noindex, nofollow` (lihat bagian E).
 
-Tidak ada rewrite SPA karena situs hanya satu halaman (`/`, navigasi pakai `#anchor`).
+Situs multi-halaman statis (tanpa SPA): `cleanUrls` melayani `/daftar` dari `daftar.html`, dan satu rewrite memetakan
+`/kegiatan/:id` ke `kegiatan-detail.html`. Tabel rute lengkap dan padanan untuk Next: [ROUTING.md](ROUTING.md).
 Alamat lain (mis. `/abc`) menampilkan `404.html` dengan status 404.
+Saat `DRAFT_NOINDEX` dimatikan: halaman formulir (`/daftar`, `/kegiatan/*`) dan 404 tetap `noindex` lewat meta robots;
+sitemap hanya memuat halaman yang boleh diindeks.
 
 **Catatan `.htaccess`:** file `.htaccess` hanya dibaca server Apache. Vercel
 mengabaikannya. Proyek ini tidak punya `.htaccess`; bila nanti ada (untuk hosting Apache),

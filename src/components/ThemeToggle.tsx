@@ -6,7 +6,7 @@ import { useI18n } from '@/i18n/useI18n'
  * lalu tersimpan sebagai pilihan eksplisit (src/hooks/useTheme.ts).
  *
  * Konvensi ikon: ikon = tema yang sedang AKTIF (matahari = Terang, bulan = Gelap).
- * Ikon mana yang terlihat dipilih CSS dari data-theme di <html> (global.css, .theme-icon),
+ * Ikon mana yang terlihat dipilih CSS dari data-theme di <html> (global.css, .theme-icon-sun/.theme-icon-moon),
  * yang sudah di-set script di index.html sebelum render. Jadi ikon benar sejak paint
  * pertama, juga pada HTML prerender, tanpa menunggu state React.
  *
@@ -24,7 +24,7 @@ export function ThemeToggle() {
       aria-pressed={dark}
       aria-label={dark ? t.nav.theme.toLight : t.nav.theme.toDark}
       onClick={toggle}
-      className="relative grid size-11 shrink-0 cursor-pointer place-items-center rounded-full border border-line text-ink transition-[background-color,scale] duration-200 ease-out hover:bg-soft motion-safe:active:scale-[0.97]"
+      className="relative grid size-11 shrink-0 cursor-pointer place-items-center rounded-full border border-line text-ink transition-[background-color] duration-120 ease-out hover:bg-soft"
     >
       <SunIcon />
       <MoonIcon />
@@ -36,7 +36,7 @@ function SunIcon() {
   return (
     <svg
       aria-hidden="true"
-      className="theme-icon theme-icon-sun absolute"
+      className="theme-icon-sun absolute"
       width="20"
       height="20"
       viewBox="0 0 24 24"
@@ -55,7 +55,7 @@ function MoonIcon() {
   return (
     <svg
       aria-hidden="true"
-      className="theme-icon theme-icon-moon absolute"
+      className="theme-icon-moon absolute"
       width="20"
       height="20"
       viewBox="0 0 24 24"

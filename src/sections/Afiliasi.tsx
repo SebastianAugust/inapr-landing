@@ -15,13 +15,12 @@ export function Afiliasi() {
       <div className="grid items-center gap-12 md:grid-cols-[1.1fr_0.9fr]">
         <div>
           <SectionHead id="afiliasi" eyebrow={c.eyebrow} title={c.title} placeholder className="mb-3" />
-          <p data-reveal className={subheading}>{c.sub}</p>
+          <p className={subheading}>{c.sub}</p>
         </div>
         <ul className="m-0 grid list-none grid-cols-3 gap-3 p-0">
           {c.logos.map((logo, i) => (
             <li
               key={`${logo}-${i}`}
-              data-reveal
               className="grid aspect-[3/2] place-items-center rounded-lg border border-dashed border-grid-major bg-surface/60 p-1 text-center font-body text-[0.7rem] font-semibold tracking-[0.1em] text-muted uppercase"
             >
               {logo}

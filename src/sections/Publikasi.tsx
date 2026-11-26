@@ -22,7 +22,6 @@ export function Publikasi() {
         {c.items.map((item, i) => (
           <li
             key={i}
-            data-reveal
             className="grid items-baseline gap-x-5 gap-y-1 border-b border-line py-4 md:grid-cols-[5rem_minmax(0,1fr)_auto]"
           >
             <span className="font-heading text-2xl font-light text-muted">{item.year}</span>

@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from 'react'
-import { prefersReducedMotion } from '@/lib/motion'
 import { storageGet, storageSet } from '@/lib/storage'
 
 export type Theme = 'light' | 'dark'
@@ -59,27 +58,10 @@ function applyDocument(resolved: Theme): void {
 // Sinkronkan ulang kalau script di index.html gagal jalan.
 if (IS_BROWSER) applyDocument(state.resolved)
 
-let transitionTimer = 0
-
-/**
- * Transisi warna singkat (±200ms, lihat .theme-transition di global.css) saat tema
- * berganti. Kelas dipasang di frame yang sama dengan pergantian data-theme, lalu dilepas.
- */
-function withColorTransition(change: () => void): void {
-  const root = document.documentElement
-  if (!prefersReducedMotion()) {
-    root.classList.add('theme-transition')
-    window.clearTimeout(transitionTimer)
-    transitionTimer = window.setTimeout(() => root.classList.remove('theme-transition'), 260)
-  }
-  change()
-}
-
+/** Tema berganti seketika (tanpa transisi). */
 function commit(next: ThemeState): void {
-  const changed = next.resolved !== state.resolved
   state = next
-  if (changed) withColorTransition(() => applyDocument(next.resolved))
-  else applyDocument(next.resolved)
+  applyDocument(next.resolved)
   listeners.forEach((listener) => listener())
 }
 

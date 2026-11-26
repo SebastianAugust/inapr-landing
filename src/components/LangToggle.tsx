@@ -1,7 +1,5 @@
-import { flushSync } from 'react-dom'
 import { ensureLang, useI18n } from '@/i18n/useI18n'
 import type { Lang } from '@/i18n/types'
-import { prefersReducedMotion } from '@/lib/motion'
 import { SegmentedToggle } from './SegmentedToggle'
 
 const OPTIONS: { value: Lang; label: string }[] = [
@@ -12,17 +10,11 @@ const OPTIONS: { value: Lang; label: string }[] = [
 export function LangToggle() {
   const { t, lang, setLang } = useI18n()
 
-  // Crossfade ringan (View Transitions API, ±200ms di global.css). Tanpa dukungan
-  // browser atau saat reduced motion: langsung ganti, tanpa animasi.
+  // Ganti bahasa langsung, tanpa animasi.
   // Kamus Inggris dimuat malas: tunggu siap DULU, baru ganti (teks lama tetap tampil sampai itu,
   // jadi tidak ada kedip). Gagal muat → bahasa tidak berubah.
   const change = async (next: Lang) => {
-    if (!(await ensureLang(next))) return
-    if (typeof document.startViewTransition !== 'function' || prefersReducedMotion()) {
-      setLang(next)
-      return
-    }
-    document.startViewTransition(() => flushSync(() => setLang(next)))
+    if (await ensureLang(next)) setLang(next)
   }
 
   return <SegmentedToggle label={t.nav.langLabel} options={OPTIONS} value={lang} onChange={change} />

@@ -7,7 +7,7 @@ import { NAV_IDS } from '@/lib/sections'
  * Satu titik per menu navbar; titik aktif mengikuti section yang sedang dibaca.
  * Nama section tampil sebagai tooltip saat hover (pointer halus) atau fokus keyboard;
  * teksnya selalu ada di DOM (opacity), jadi tetap menjadi nama tautan bagi pembaca layar.
- * Hanya transform/opacity; instan saat reduced motion (aturan global).
+ * Tanpa gerak: tooltip muncul/hilang langsung, titik hanya berganti warna.
  */
 export function SectionRail() {
   const { t } = useI18n()
@@ -27,12 +27,12 @@ export function SectionRail() {
               className="group relative grid size-6 place-items-center rounded-full no-underline"
             >
               {/* Absolut: label tak terlihat tidak memperlebar area klik ke atas konten. */}
-              <span className="pointer-events-none absolute top-1/2 right-full mr-1 translate-x-1 -translate-y-1/2 rounded-md bg-surface/95 px-2 py-0.5 font-body text-xs font-semibold whitespace-nowrap text-ink opacity-0 shadow-sm shadow-ink/10 transition-[opacity,translate] duration-200 ease-out group-focus-visible:translate-x-0 group-focus-visible:opacity-100 pointer-fine:group-hover:translate-x-0 pointer-fine:group-hover:opacity-100">
+              <span className="pointer-events-none absolute top-1/2 right-full mr-1 -translate-y-1/2 rounded-md bg-surface/95 px-2 py-0.5 font-body text-xs font-semibold whitespace-nowrap text-ink opacity-0 shadow-sm shadow-ink/10 group-focus-visible:opacity-100 pointer-fine:group-hover:opacity-100">
                 {t.nav.items[id]}
               </span>
               <span
                 aria-hidden="true"
-                className="block size-2.5 rounded-full border border-muted bg-bg transition-[scale,background-color,border-color] duration-200 ease-out group-aria-[current=location]:scale-125 group-aria-[current=location]:border-accent group-aria-[current=location]:bg-accent pointer-fine:group-hover:scale-125"
+                className="block size-2.5 rounded-full border border-muted bg-bg transition-[background-color,border-color] duration-120 ease-out group-aria-[current=location]:border-accent group-aria-[current=location]:bg-accent pointer-fine:group-hover:border-accent"
               />
             </a>
           </li>
